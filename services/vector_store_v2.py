@@ -30,15 +30,20 @@ class VectorStoreV2:
             index_dir: Directory to store FAISS index and metadata
             embedding_dim: Dimension of embedding vectors
         """
-        self.index_dir = index_dir
+        # Use separate subdirectory for SQLite storage to avoid conflicts with JSON
+        self.index_dir = index_dir / "sqlite"
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_dim = embedding_dim
 
         self.index_path = self.index_dir / "faiss.index"
         self.metadata_db_path = self.index_dir / "metadata.db"
+        self.embeddings_path = self.index_dir / "embeddings.npy"
 
         # FAISS index
         self.index: Optional[faiss.Index] = None
+
+        # Embeddings storage: NumPy array of embeddings
+        self.embeddings: Optional[np.ndarray] = None
 
         # SQLite metadata store
         self.metadata_store = MetadataStore(self.metadata_db_path)
@@ -51,6 +56,14 @@ class VectorStoreV2:
             logger.info("Loading existing FAISS index")
             self.index = faiss.read_index(str(self.index_path))
 
+            # Load embeddings if they exist
+            if self.embeddings_path.exists():
+                self.embeddings = np.load(str(self.embeddings_path))
+                logger.info(f"Loaded embeddings array with shape {self.embeddings.shape}")
+            else:
+                logger.warning("Embeddings file not found - deletion will not work properly")
+                self.embeddings = None
+
             total_chunks = self.metadata_store.get_total_chunks()
             logger.info(f"Loaded index with {total_chunks} chunks")
         else:
@@ -58,6 +71,7 @@ class VectorStoreV2:
             # Use IndexFlatIP for cosine similarity (inner product)
             # Vectors must be L2 normalized before adding
             self.index = faiss.IndexFlatIP(self.embedding_dim)
+            self.embeddings = None
             logger.info("Created new index")
 
     def add_chunks(self, chunks: List[ChunkMetadata], embeddings: np.ndarray):
@@ -79,6 +93,12 @@ class VectorStoreV2:
 
         # Add to FAISS index
         self.index.add(embeddings_normalized.astype(np.float32))
+
+        # Store embeddings
+        if self.embeddings is None:
+            self.embeddings = embeddings_normalized.astype(np.float32)
+        else:
+            self.embeddings = np.vstack([self.embeddings, embeddings_normalized.astype(np.float32)])
 
         # Add metadata to SQLite
         chunk_dicts = [chunk.model_dump() for chunk in chunks]
@@ -137,24 +157,51 @@ class VectorStoreV2:
 
     def delete_document(self, document_id: str) -> int:
         """
-        Delete all chunks belonging to a document from metadata.
+        Delete all chunks belonging to a document.
 
-        Note: FAISS vectors remain in the index (FAISS limitation).
-        For full cleanup, rebuild the index after deleting many documents.
+        Note: FAISS doesn't support efficient deletion, so we rebuild the index.
 
         Args:
             document_id: Document ID to delete
 
         Returns:
-            Number of chunks deleted from metadata
+            Number of chunks deleted
         """
-        num_deleted = self.metadata_store.delete_document(document_id)
+        # Get indices to delete from metadata store
+        indices_to_delete = set(self.metadata_store.get_document_chunk_indices(document_id))
 
-        if num_deleted > 0:
-            logger.warning(
-                f"Deleted {num_deleted} chunks from metadata. "
-                f"FAISS vectors remain (rebuild index for full cleanup)"
-            )
+        if len(indices_to_delete) == 0:
+            logger.warning(f"Document {document_id} not found in index")
+            return 0
+
+        num_deleted = len(indices_to_delete)
+        logger.info(f"Deleting {num_deleted} chunks for document {document_id}")
+
+        # Delete from metadata (SQLite)
+        self.metadata_store.delete_document(document_id)
+
+        # Rebuild FAISS index with remaining embeddings
+        if self.embeddings is not None:
+            new_embeddings = []
+            for idx in range(len(self.embeddings)):
+                if idx not in indices_to_delete:
+                    new_embeddings.append(self.embeddings[idx])
+
+            # Rebuild FAISS index
+            logger.info(f"Rebuilding index with {len(new_embeddings)} remaining chunks")
+            self.index = faiss.IndexFlatIP(self.embedding_dim)
+
+            if len(new_embeddings) > 0:
+                self.embeddings = np.array(new_embeddings, dtype=np.float32)
+                self.index.add(self.embeddings)
+                logger.info(f"Re-added {len(new_embeddings)} vectors to index")
+            else:
+                self.embeddings = None
+                logger.info("Index is now empty")
+        else:
+            logger.warning("No embeddings stored - cannot rebuild index properly")
+
+        logger.info(f"Successfully deleted document {document_id}")
 
         return num_deleted
 
@@ -168,23 +215,19 @@ class VectorStoreV2:
         return self.metadata_store.list_documents()
 
     def save(self):
-        """Persist the FAISS index to disk. Metadata is already persisted in SQLite."""
+        """Persist the FAISS index, embeddings, and metadata to disk."""
         logger.info(f"Saving FAISS index with {self.index.ntotal} vectors")
         faiss.write_index(self.index, str(self.index_path))
+
+        # Save embeddings
+        if self.embeddings is not None:
+            np.save(str(self.embeddings_path), self.embeddings)
+            logger.info(f"Saved embeddings array with shape {self.embeddings.shape}")
+
+        # Metadata is already persisted in SQLite
         logger.info("Index saved successfully")
 
     def get_total_chunks(self) -> int:
         """Get the total number of chunks in the index."""
         return self.metadata_store.get_total_chunks()
 
-    def rebuild_index(self):
-        """
-        Rebuild FAISS index to remove deleted documents.
-
-        WARNING: This requires re-embedding all documents.
-        Not implemented in current version - see SCALING.md for alternatives.
-        """
-        raise NotImplementedError(
-            "Index rebuild requires re-embedding. "
-            "Consider migrating to pgvector or Qdrant for better deletion support."
-        )

@@ -5,18 +5,18 @@
     <!-- Upload Form -->
     <div class="form-control w-full">
       <label class="label">
-        <span class="label-text">Select PDF files to upload</span>
+        <span class="label-text">Select documents to upload</span>
       </label>
       <input
         ref="fileInput"
         type="file"
         multiple
-        accept=".pdf"
+        accept=".pdf,.txt,.docx,.csv"
         class="file-input file-input-bordered w-full"
         @change="handleFileSelect"
       />
       <label class="label">
-        <span class="label-text-alt">Select one or more PDF files</span>
+        <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV)</span>
       </label>
     </div>
 
@@ -54,7 +54,7 @@
       <div v-if="hasLargeFiles()" class="alert alert-warning">
         <AlertTriangle :size="24" class="stroke-current shrink-0" />
         <span class="text-sm">
-          <strong>Large file(s) detected.</strong> Files over 1 MB may take several minutes to process.
+          <strong>Large file(s) detected.</strong> Large files may take several minutes to process.
           Estimated time: {{ estimateProcessingTime() }}
         </span>
       </div>
@@ -95,7 +95,7 @@
       <div>
         <h3 class="font-bold">Processing Your Files</h3>
         <div class="text-xs">
-          Please keep this page open. Large PDFs may take 1-5 minutes to process.
+          Please keep this page open. Large files may take 1-5 minutes to process.
           <br>The system is extracting text, chunking content, and generating embeddings.
         </div>
       </div>
@@ -139,7 +139,7 @@
         <h3 class="font-bold">Upload Tips</h3>
         <div class="text-xs">
           <ul class="list-disc list-inside mt-1">
-            <li>Only PDF files are supported</li>
+            <li>Supported formats: PDF, TXT, DOCX, CSV</li>
             <li>Files are processed and indexed automatically</li>
             <li>Larger files may take longer to process</li>
             <li>Duplicate files (by content) are automatically detected</li>
@@ -210,7 +210,7 @@ const estimateProcessingTime = () => {
   const totalBytes = selectedFiles.value.reduce((sum, file) => sum + file.size, 0)
   const totalMB = totalBytes / (1024 * 1024)
 
-  // Rough estimate: ~30 seconds per MB (varies with PDF complexity)
+  // Rough estimate: ~30 seconds per MB (varies with file complexity)
   const estimatedSeconds = Math.ceil(totalMB * 30)
 
   if (estimatedSeconds < 60) {

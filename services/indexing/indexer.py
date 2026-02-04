@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 
 from models.schemas import DocumentMetadata, ChunkMetadata, SearchResult
-from services.pdf_extractor import PDFExtractor
+from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
@@ -22,7 +22,7 @@ class DocumentIndexer:
         self,
         vector_store: VectorStore,
         embedding_service: EmbeddingService,
-        pdf_extractor: PDFExtractor,
+        document_extractor: DocumentExtractor,
         text_chunker: TextChunker,
     ):
         """
@@ -31,20 +31,20 @@ class DocumentIndexer:
         Args:
             vector_store: Vector store instance
             embedding_service: Embedding service instance
-            pdf_extractor: PDF extractor instance
+            document_extractor: Document extractor instance (supports PDF, TXT, DOCX, CSV)
             text_chunker: Text chunker instance
         """
         self.vector_store = vector_store
         self.embedding_service = embedding_service
-        self.pdf_extractor = pdf_extractor
+        self.document_extractor = document_extractor
         self.text_chunker = text_chunker
 
-    def index_document(self, pdf_path: Path, filename: str) -> DocumentMetadata:
+    def index_document(self, document_path: Path, filename: str) -> DocumentMetadata:
         """
-        Index a single PDF document.
+        Index a single document (PDF, TXT, DOCX, or CSV).
 
         Args:
-            pdf_path: Path to the PDF file
+            document_path: Path to the document file
             filename: Original filename
 
         Returns:
@@ -53,11 +53,11 @@ class DocumentIndexer:
         logger.info(f"Indexing document: {filename}")
 
         # Generate document ID from file content hash
-        document_id = self._generate_document_id(pdf_path)
+        document_id = self._generate_document_id(document_path)
 
-        # Extract text from PDF
+        # Extract text from document
         logger.debug(f"Extracting text from {filename}")
-        page_texts = self.pdf_extractor.extract_text(pdf_path)
+        page_texts = self.document_extractor.extract_text(document_path)
         num_pages = len(page_texts)
 
         if num_pages == 0:
@@ -148,18 +148,18 @@ class DocumentIndexer:
         """Persist the vector store to disk."""
         self.vector_store.save()
 
-    def _generate_document_id(self, pdf_path: Path) -> str:
+    def _generate_document_id(self, document_path: Path) -> str:
         """
         Generate a unique document ID based on file content.
 
         Args:
-            pdf_path: Path to the PDF file
+            document_path: Path to the document file
 
         Returns:
             Document ID (SHA256 hash)
         """
         hasher = hashlib.sha256()
-        with open(pdf_path, "rb") as f:
+        with open(document_path, "rb") as f:
             # Read file in chunks to handle large files
             for chunk in iter(lambda: f.read(8192), b""):
                 hasher.update(chunk)
