@@ -4,6 +4,8 @@
 
 Upload PDFs, search their contents using natural language, and get back relevant passages with direct links to the source pages. Runs entirely locally with no external dependencies.
 
+> **Why "Asymptote"?** In mathematics, an asymptote is a line that a curve approaches but never quite reaches. Like semantic search continuously approaching perfect understanding of your documents - getting closer with every query, but always refining, always learning. We're forever approaching the answer, never claiming to have reached it completely.
+
 ---
 
 ## Table of Contents
