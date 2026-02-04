@@ -33,17 +33,23 @@ pip install -r requirements.txt
 python main.py
 
 # 3. Open your browser
-open http://localhost:8000/docs
+open http://localhost:8000
 ```
 
 ### Docker
 
 ```bash
 docker-compose up -d
-open http://localhost:8000/docs
+open http://localhost:8000
 ```
 
 **First time setup**: The embedding model (~90MB) will download automatically on first run.
+
+### What You Get
+
+- **Web Interface**: http://localhost:8000 - Simple UI for searching, uploading, and managing documents
+- **API Docs**: http://localhost:8000/docs - Interactive OpenAPI documentation
+- **API Endpoint**: http://localhost:8000/api - REST API for programmatic access
 
 ---
 

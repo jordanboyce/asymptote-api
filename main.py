@@ -12,7 +12,8 @@ import shutil
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from services.pdf_extractor import PDFExtractor
@@ -123,12 +124,34 @@ app.add_middleware(
 pdf_dir = settings.data_dir / "pdfs"
 pdf_dir.mkdir(parents=True, exist_ok=True)
 
+# Prepare static directory
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+# Web Interface
+
+@app.get("/", response_class=HTMLResponse, tags=["ui"])
+async def web_interface():
+    """Serve the web interface."""
+    index_path = static_dir / "index.html"
+    if index_path.exists():
+        return HTMLResponse(content=index_path.read_text(encoding="utf-8"), status_code=200)
+    else:
+        return HTMLResponse(
+            content="<h1>Asymptote API</h1><p>Web interface not found. Visit <a href='/docs'>/docs</a> for API documentation.</p>",
+            status_code=200
+        )
+
 
 # API Endpoints
 
-@app.get("/", tags=["health"])
-async def root():
-    """Root endpoint - API health check."""
+@app.get("/api", tags=["health"])
+async def api_root():
+    """API root endpoint."""
     return {
         "service": "Asymptote API",
         "status": "operational",
@@ -332,10 +355,13 @@ async def get_pdf(
                 detail=f"PDF file not found: {doc['filename']}",
             )
 
+        # Return PDF with inline display (not download)
         return FileResponse(
             path=pdf_path,
             media_type="application/pdf",
-            filename=doc["filename"],
+            headers={
+                "Content-Disposition": f'inline; filename="{doc["filename"]}"'
+            }
         )
 
     except HTTPException:
