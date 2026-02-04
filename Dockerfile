@@ -1,7 +1,7 @@
 # Asymptote API Dockerfile
 # Multi-stage build for optimized image size
 
-FROM python:3.11-slim as base
+FROM python:3.13-slim as base
 
 # Set working directory
 WORKDIR /app

@@ -117,7 +117,7 @@ Asymptote lets you:
 
 ### Prerequisites
 
-- **Python 3.8+** (check: `python --version`)
+- **Python 3.13** (highly recommended) or **Python 3.8+** (check: `python --version`)
 - **4GB RAM minimum** (8GB recommended for large collections)
 - **500MB disk space** (more for storing PDFs and indexes)
 
@@ -443,11 +443,11 @@ docker-compose up -d
 
 ```bash
 # Check version
-python --version  # Need 3.8+
+python --version  # Need 3.8+, Python 3.13 highly recommended
 
 # Upgrade Python or use pyenv
-pyenv install 3.11
-pyenv local 3.11
+pyenv install 3.13
+pyenv local 3.13
 ```
 
 #### "ModuleNotFoundError"
