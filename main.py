@@ -128,9 +128,6 @@ pdf_dir.mkdir(parents=True, exist_ok=True)
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
 
 # Web Interface
 
@@ -216,8 +213,8 @@ async def upload_documents(
             doc_metadata = indexer.index_document(file_path, file.filename)
 
             indexed_docs.append(doc_metadata.document_id)
-            total_pages += doc_metadata.num_pages
-            total_chunks += doc_metadata.num_chunks
+            total_pages += doc_metadata.total_pages
+            total_chunks += doc_metadata.total_chunks
 
         except Exception as e:
             logger.error(f"Failed to index {file.filename}: {e}")
@@ -297,13 +294,20 @@ async def list_documents(
         # Convert to DocumentMetadata objects
         doc_metadata_list = []
         for doc in documents:
-            # Add placeholder timestamp (not tracked in current implementation)
+            # Get timestamp from PDF file modification time
+            pdf_path = pdf_dir / doc["filename"]
+            indexed_at = ""
+            if pdf_path.exists():
+                from datetime import datetime
+                mtime = pdf_path.stat().st_mtime
+                indexed_at = datetime.fromtimestamp(mtime).isoformat()
+
             doc_metadata = DocumentMetadata(
                 document_id=doc["document_id"],
                 filename=doc["filename"],
-                num_pages=doc["num_pages"],
-                num_chunks=doc["num_chunks"],
-                upload_timestamp="",  # Not tracked in vector store
+                total_pages=doc["total_pages"],
+                total_chunks=doc["total_chunks"],
+                indexed_at=indexed_at,
             )
             doc_metadata_list.append(doc_metadata)
 
@@ -387,23 +391,39 @@ async def delete_document(
     """
     Remove a document and all its chunks from the index.
 
-    Note: Current implementation has limitations - see vector_store.py for details.
+    This will delete:
+    - The document's metadata from the index
+    - All chunks associated with the document
+    - The PDF file from the data/pdfs directory
     """
     try:
-        num_deleted = indexer.delete_document(document_id)
+        # Get document metadata before deletion to find the PDF filename
+        documents = indexer.list_documents()
+        doc = next((d for d in documents if d["document_id"] == document_id), None)
 
-        if num_deleted == 0:
+        if not doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
             )
+
+        # Delete from index
+        num_deleted = indexer.delete_document(document_id)
+
+        # Delete PDF file from filesystem
+        pdf_path = pdf_dir / doc["filename"]
+        if pdf_path.exists():
+            pdf_path.unlink()
+            logger.info(f"Deleted PDF file: {doc['filename']}")
 
         # Persist the changes
         indexer.save_index()
 
         return {
             "message": f"Deleted document {document_id}",
+            "filename": doc["filename"],
             "chunks_deleted": num_deleted,
+            "pdf_deleted": True,
         }
 
     except HTTPException:
@@ -414,6 +434,11 @@ async def delete_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete document: {str(e)}",
         )
+
+
+# Mount static files at root to serve /assets/* and other static content
+# This must be last so it doesn't override API routes
+app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 
 
 if __name__ == "__main__":

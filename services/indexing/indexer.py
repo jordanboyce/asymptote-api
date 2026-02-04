@@ -90,9 +90,9 @@ class DocumentIndexer:
         metadata = DocumentMetadata(
             document_id=document_id,
             filename=filename,
-            num_pages=num_pages,
-            num_chunks=num_chunks,
-            upload_timestamp=datetime.utcnow().isoformat(),
+            total_pages=num_pages,
+            total_chunks=num_chunks,
+            indexed_at=datetime.utcnow().isoformat(),
         )
 
         logger.info(f"Successfully indexed {filename}: {num_pages} pages, {num_chunks} chunks")

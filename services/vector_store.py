@@ -29,12 +29,16 @@ class VectorStore:
 
         self.index_path = self.index_dir / "faiss.index"
         self.metadata_path = self.index_dir / "metadata.json"
+        self.embeddings_path = self.index_dir / "embeddings.npy"
 
         # FAISS index (using L2 distance, will convert to cosine similarity)
         self.index: Optional[faiss.Index] = None
 
         # Metadata storage: list of ChunkMetadata dicts
         self.metadata: List[dict] = []
+
+        # Embeddings storage: NumPy array of embeddings
+        self.embeddings: Optional[np.ndarray] = None
 
         # Document tracking
         self.document_map: dict[str, List[int]] = {}  # doc_id -> list of chunk indices
@@ -49,6 +53,14 @@ class VectorStore:
             with open(self.metadata_path, "r", encoding="utf-8") as f:
                 self.metadata = json.load(f)
 
+            # Load embeddings if they exist
+            if self.embeddings_path.exists():
+                self.embeddings = np.load(str(self.embeddings_path))
+                logger.info(f"Loaded embeddings array with shape {self.embeddings.shape}")
+            else:
+                logger.warning("Embeddings file not found - deletion will not work properly")
+                self.embeddings = None
+
             # Rebuild document map
             self._rebuild_document_map()
 
@@ -59,6 +71,7 @@ class VectorStore:
             # Vectors must be L2 normalized before adding
             self.index = faiss.IndexFlatIP(self.embedding_dim)
             self.metadata = []
+            self.embeddings = None
             self.document_map = {}
 
     def _rebuild_document_map(self):
@@ -89,6 +102,12 @@ class VectorStore:
 
         # Add to FAISS index
         self.index.add(embeddings_normalized.astype(np.float32))
+
+        # Store embeddings
+        if self.embeddings is None:
+            self.embeddings = embeddings_normalized.astype(np.float32)
+        else:
+            self.embeddings = np.vstack([self.embeddings, embeddings_normalized.astype(np.float32)])
 
         # Add metadata
         start_idx = len(self.metadata)
@@ -168,33 +187,37 @@ class VectorStore:
         indices_to_delete = set(self.document_map[document_id])
         num_deleted = len(indices_to_delete)
 
-        # Create new metadata without deleted chunks
-        new_metadata = [
-            chunk for idx, chunk in enumerate(self.metadata)
-            if idx not in indices_to_delete
-        ]
+        logger.info(f"Deleting {num_deleted} chunks for document {document_id}")
+
+        # Create new metadata and embeddings without deleted chunks
+        new_metadata = []
+        new_embeddings = []
+
+        for idx, chunk in enumerate(self.metadata):
+            if idx not in indices_to_delete:
+                new_metadata.append(chunk)
+                if self.embeddings is not None:
+                    new_embeddings.append(self.embeddings[idx])
 
         # Rebuild index (FAISS doesn't support efficient deletion)
-        logger.info(f"Rebuilding index after deleting {num_deleted} chunks")
+        logger.info(f"Rebuilding index with {len(new_metadata)} remaining chunks")
         self.metadata = new_metadata
+
+        # Rebuild FAISS index with remaining embeddings
         self.index = faiss.IndexFlatIP(self.embedding_dim)
 
-        # Re-add all remaining vectors
-        # This requires re-embedding, but since we don't store embeddings,
-        # we'll need to handle this differently. For now, we'll mark this as a limitation.
-        # Alternative: Store embeddings separately or use a different vector DB
+        if len(new_embeddings) > 0:
+            self.embeddings = np.array(new_embeddings, dtype=np.float32)
+            self.index.add(self.embeddings)
+            logger.info(f"Re-added {len(new_embeddings)} vectors to index")
+        else:
+            self.embeddings = None
+            logger.info("Index is now empty")
 
-        # For now, clear document from map
-        del self.document_map[document_id]
+        # Rebuild document map
+        self._rebuild_document_map()
 
-        # TODO: This implementation has a limitation - we lose embeddings on deletion
-        # Need to either:
-        # 1. Store embeddings separately
-        # 2. Use a different vector store that supports deletion
-        # 3. Accept rebuild cost and re-embed on deletion
-
-        logger.warning("Document deleted from metadata, but index rebuild requires re-embedding")
-        logger.warning("Consider re-initializing the index if you need to search after deletion")
+        logger.info(f"Successfully deleted document {document_id}")
 
         return num_deleted
 
@@ -213,11 +236,11 @@ class VectorStore:
                 doc_stats[doc_id] = {
                     "document_id": doc_id,
                     "filename": chunk["filename"],
-                    "num_chunks": 0,
+                    "total_chunks": 0,
                     "pages": set(),
                 }
 
-            doc_stats[doc_id]["num_chunks"] += 1
+            doc_stats[doc_id]["total_chunks"] += 1
             doc_stats[doc_id]["pages"].add(chunk["page_number"])
 
         # Convert to list and add page count
@@ -226,19 +249,24 @@ class VectorStore:
             documents.append({
                 "document_id": doc_id,
                 "filename": stats["filename"],
-                "num_pages": len(stats["pages"]),
-                "num_chunks": stats["num_chunks"],
+                "total_pages": len(stats["pages"]),
+                "total_chunks": stats["total_chunks"],
             })
 
         return documents
 
     def save(self):
-        """Persist the index and metadata to disk."""
+        """Persist the index, embeddings, and metadata to disk."""
         logger.info(f"Saving index with {len(self.metadata)} chunks")
         faiss.write_index(self.index, str(self.index_path))
 
         with open(self.metadata_path, "w", encoding="utf-8") as f:
             json.dump(self.metadata, f, indent=2)
+
+        # Save embeddings
+        if self.embeddings is not None:
+            np.save(str(self.embeddings_path), self.embeddings)
+            logger.info(f"Saved embeddings array with shape {self.embeddings.shape}")
 
         logger.info("Index saved successfully")
 

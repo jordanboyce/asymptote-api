@@ -20,9 +20,9 @@ class DocumentMetadata(BaseModel):
 
     document_id: str = Field(..., description="Unique identifier for the document")
     filename: str = Field(..., description="Original filename")
-    num_pages: int = Field(..., description="Total number of pages")
-    num_chunks: int = Field(..., description="Total number of chunks created")
-    upload_timestamp: str = Field(..., description="ISO timestamp of upload")
+    total_pages: int = Field(..., description="Total number of pages")
+    total_chunks: int = Field(..., description="Total number of chunks created")
+    indexed_at: str = Field(default="", description="ISO timestamp of indexing")
 
 
 class SearchResult(BaseModel):
