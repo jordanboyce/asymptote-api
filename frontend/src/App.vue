@@ -9,7 +9,7 @@
             <img src="/icon_white.svg" alt="Asymptote" class="h-10 w-10">
             <div>
               <h1 class="text-2xl font-bold">Asymptote</h1>
-              <p class="text-xs text-primary-content/80">Semantic PDF Search</p>
+              <p class="text-xs text-primary-content/80">Semantic Document Search</p>
             </div>
           </div>
 

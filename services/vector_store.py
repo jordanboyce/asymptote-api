@@ -23,7 +23,8 @@ class VectorStore:
             index_dir: Directory to store FAISS index and metadata
             embedding_dim: Dimension of embedding vectors
         """
-        self.index_dir = index_dir
+        # Use separate subdirectory for JSON storage to avoid conflicts with SQLite
+        self.index_dir = index_dir / "json"
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_dim = embedding_dim
 

@@ -1,8 +1,8 @@
 # Asymptote API
 
-**Self-hosted semantic search for PDF documents**
+**Self-hosted semantic search for documents**
 
-Upload PDFs, search their contents using natural language, and get back relevant passages with direct links to the source pages. Runs entirely locally with no external dependencies.
+Upload documents (PDF, TXT, DOCX, CSV), search their contents using natural language, and get back relevant passages with direct links to the source. Runs entirely locally with no external dependencies.
 
 > **Why "Asymptote"?** In mathematics, an asymptote is a line that a curve approaches but never quite reaches. Like semantic search continuously approaching perfect understanding of your documents - getting closer with every query, but always refining, always learning. We're forever approaching the answer, never claiming to have reached it completely.
 
@@ -57,10 +57,12 @@ open http://localhost:8000
 
 Asymptote lets you:
 
-1. **Upload PDFs** - Drop in any PDF documents (books, papers, manuals)
+1. **Upload Documents** - Drop in PDF, TXT, DOCX, or CSV files (books, papers, manuals, data)
 2. **Semantic Search** - Ask questions in plain English, not just keywords
-3. **Get Results** - Find relevant passages with page numbers and direct PDF links
+3. **Get Results** - Find relevant passages with page numbers and direct document links
 4. **Scale Up** - Handle hundreds to thousands of documents locally
+
+**Supported file types:** PDF, TXT, DOCX, CSV
 
 **Example:**
 - Query: *"How do I optimize database queries?"*
@@ -78,14 +80,18 @@ Asymptote lets you:
 | **uvicorn** | 0.32.1 | ASGI server that runs FastAPI | `main.py` |
 | **python-multipart** | 0.0.18 | Handles file uploads (PDFs) | `main.py` |
 
-### PDF Processing
+### Document Processing
 
 | Package | Version | Purpose | Used In |
 |---------|---------|---------|---------|
-| **pypdf** | 5.1.0 | Extracts text from standard PDFs | `services/pdf_extractor.py` |
-| **pdfplumber** | 0.11.4 | Extracts text from complex layouts (columns, tables) | `services/pdf_extractor.py` |
+| **pypdf** | 5.1.0 | Extracts text from standard PDFs | `services/document_extractor.py` |
+| **pdfplumber** | 0.11.4 | Extracts text from complex PDF layouts (columns, tables) | `services/document_extractor.py` |
+| **python-docx** | 1.1.2 | Extracts text from DOCX files | `services/document_extractor.py` |
+| **pandas** | 2.2.3 | Extracts data from CSV files | `services/document_extractor.py` |
 
 **Why two PDF libraries?** We try pdfplumber first (handles complex layouts better), then fall back to pypdf if needed.
+
+**Supported formats:** PDF, TXT, DOCX, CSV
 
 ### Search & Embeddings
 
@@ -272,6 +278,28 @@ PORT=8000
 - ✅ 30x faster startup
 - ✅ Better for production
 
+#### Switching Between Storage Types
+
+Both storage types now use **separate directories** to prevent data conflicts:
+- **JSON storage**: `data/indexes/json/`
+- **SQLite storage**: `data/indexes/sqlite/`
+
+**To switch from JSON to SQLite:**
+1. Change `METADATA_STORAGE=sqlite` in `.env` or `config.py`
+2. Restart the server
+3. Your JSON data remains in `data/indexes/json/` (untouched)
+4. SQLite will start fresh in `data/indexes/sqlite/` (empty)
+5. Re-upload your documents to populate the SQLite index
+
+**To switch from SQLite to JSON:**
+1. Change `METADATA_STORAGE=json` in `.env` or `config.py`
+2. Restart the server
+3. Your SQLite data remains in `data/indexes/sqlite/` (untouched)
+4. JSON will start fresh in `data/indexes/json/` (empty)
+5. Re-upload your documents to populate the JSON index
+
+**Important:** Switching storage types requires re-uploading documents. Both storage systems maintain independent indexes, so you can safely switch back and forth without losing data.
+
 **To switch to SQLite:**
 ```bash
 echo "METADATA_STORAGE=sqlite" >> .env
@@ -292,9 +320,16 @@ See [METADATA_STORAGE.md](METADATA_STORAGE.md) for details.
 ### Upload Documents
 
 ```bash
+# Upload PDFs
 curl -X POST "http://localhost:8000/documents/upload" \
   -F "files=@document1.pdf" \
   -F "files=@document2.pdf"
+
+# Upload other file types (TXT, DOCX, CSV)
+curl -X POST "http://localhost:8000/documents/upload" \
+  -F "files=@notes.txt" \
+  -F "files=@report.docx" \
+  -F "files=@data.csv"
 ```
 
 **Response:**
@@ -309,8 +344,8 @@ curl -X POST "http://localhost:8000/documents/upload" \
 ```
 
 **What happens:**
-1. PDFs are saved to `data/pdfs/`
-2. Text is extracted from each page
+1. Documents are saved to `data/documents/`
+2. Text is extracted from each file (page-by-page for PDFs, section-by-section for others)
 3. Text is split into overlapping chunks
 4. Each chunk is converted to an embedding
 5. Embeddings are indexed with FAISS
@@ -359,9 +394,10 @@ open "http://localhost:8000/documents/abc123/pdf#page=42"
 curl "http://localhost:8000/documents"
 ```
 
-### Download PDF
+### Download Document
 
 ```bash
+# Download any document type
 curl "http://localhost:8000/documents/abc123/pdf" -o output.pdf
 ```
 
@@ -384,10 +420,10 @@ curl -X DELETE "http://localhost:8000/documents/abc123"
 **What happens:**
 1. Document metadata is removed from the index
 2. All associated chunks are deleted from the vector store
-3. The PDF file is removed from `data/pdfs/`
+3. The document file is removed from `data/documents/`
 4. Changes are persisted to disk
 
-**Note:** Deletion is permanent and cannot be undone. The PDF file will be completely removed from the filesystem.
+**Note:** Deletion is permanent and cannot be undone. The document file will be completely removed from the filesystem.
 
 ### Interactive Documentation
 
@@ -432,20 +468,24 @@ pip install faiss-cpu
   1. Get model from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
   2. Place in `~/.cache/torch/sentence_transformers/`
 
-#### 4. "PDF extraction failed"
+#### 4. "Document extraction failed"
 
 **Possible causes:**
-- Corrupted PDF
-- Scanned images (no text layer)
-- Protected/encrypted PDF
+- **PDFs:** Corrupted file, scanned images (no text layer), or protected/encrypted
+- **DOCX:** Corrupted file or unsupported Word version
+- **CSV:** Encoding issues or malformed CSV
+- **TXT:** Encoding issues
 
 **Solutions:**
 ```bash
-# Check PDF with another tool
+# For PDFs - check with another tool
 pdfinfo yourfile.pdf
 
-# Try converting first
+# For PDFs - try converting first
 pdftk input.pdf output output.pdf
+
+# For text files - check encoding
+file -i yourfile.txt
 ```
 
 #### 5. "Out of memory"
@@ -600,8 +640,8 @@ echo "EMBEDDING_MODEL=paraphrase-MiniLM-L3-v2" >> .env
 
 **What to backup:**
 ```bash
-# PDFs
-data/pdfs/
+# Documents (all file types)
+data/documents/
 
 # FAISS index
 data/indexes/faiss.index
@@ -636,7 +676,7 @@ asymptote/
 │   └── schemas.py            # Pydantic request/response models
 │
 ├── services/                  # Business logic
-│   ├── pdf_extractor.py      # Extracts text from PDFs
+│   ├── document_extractor.py # Extracts text from documents (PDF, TXT, DOCX, CSV)
 │   ├── chunker.py            # Splits text into chunks
 │   ├── embedder.py           # Generates embeddings
 │   ├── vector_store.py       # FAISS index (JSON metadata)
@@ -656,7 +696,7 @@ asymptote/
 │       ├── style.css         # Global styles (Tailwind imports)
 │       └── components/
 │           ├── SearchTab.vue      # Search interface
-│           ├── UploadTab.vue      # PDF upload interface
+│           ├── UploadTab.vue      # Document upload interface (PDF, TXT, DOCX, CSV)
 │           ├── DocumentsTab.vue   # Document management
 │           └── SettingsTab.vue    # Settings & info
 │
@@ -668,7 +708,7 @@ asymptote/
 │   └── test_api.py           # API tests
 │
 ├── data/                      # Runtime data (gitignored)
-│   ├── pdfs/                 # Uploaded PDFs
+│   ├── documents/            # Uploaded documents (PDF, TXT, DOCX, CSV)
 │   └── indexes/              # FAISS + metadata
 │
 ├── .env.example              # Configuration template
@@ -688,13 +728,22 @@ import requests
 
 BASE_URL = "http://localhost:8000"
 
-# Upload PDFs
+# Upload documents (PDF, TXT, DOCX, CSV)
 with open("document.pdf", "rb") as f:
     response = requests.post(
         f"{BASE_URL}/documents/upload",
         files={"files": f}
     )
     print(response.json())
+
+# Upload multiple file types at once
+files = [
+    ("files", open("notes.txt", "rb")),
+    ("files", open("report.docx", "rb")),
+    ("files", open("data.csv", "rb"))
+]
+response = requests.post(f"{BASE_URL}/documents/upload", files=files)
+print(response.json())
 
 # Search
 response = requests.post(
@@ -719,7 +768,7 @@ See [example_usage.py](example_usage.py) for more examples.
 A: Yes! Python and Docker both work on Windows.
 
 **Q: Does it support other file formats?**
-A: Only PDFs currently. DOCX, TXT support planned.
+A: Yes! Currently supports PDF, TXT, DOCX, and CSV files.
 
 **Q: Can I use it offline?**
 A: Yes, after the first run (model downloads once).

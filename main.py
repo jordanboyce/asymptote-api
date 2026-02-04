@@ -1,7 +1,8 @@
 """
-Asymptote API - Self-hosted semantic search for PDFs
+Asymptote API - Self-hosted semantic search for documents
 
 Main application entry point.
+Supports PDF, TXT, DOCX, and CSV files.
 """
 
 import logging
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from services.pdf_extractor import PDFExtractor
+from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
             embedding_dim=embedding_service.embedding_dim,
         )
 
-    pdf_extractor = PDFExtractor()
+    document_extractor = DocumentExtractor()
     text_chunker = TextChunker(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
@@ -85,7 +86,7 @@ async def lifespan(app: FastAPI):
     _indexer = DocumentIndexer(
         vector_store=vector_store,
         embedding_service=embedding_service,
-        pdf_extractor=pdf_extractor,
+        document_extractor=document_extractor,
         text_chunker=text_chunker,
     )
 
@@ -106,7 +107,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Asymptote API",
-    description="Self-hosted semantic search for PDF documents",
+    description="Self-hosted semantic search for documents (PDF, TXT, DOCX, CSV)",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -120,9 +121,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Prepare PDF directory
-pdf_dir = settings.data_dir / "pdfs"
-pdf_dir.mkdir(parents=True, exist_ok=True)
+# Prepare documents directory (supports PDF, TXT, DOCX, CSV)
+document_dir = settings.data_dir / "documents"
+document_dir.mkdir(parents=True, exist_ok=True)
 
 # Prepare static directory
 static_dir = Path(__file__).parent / "static"
@@ -170,7 +171,7 @@ async def health(indexer: DocumentIndexer = Depends(get_indexer)):
     "/documents/upload",
     response_model=UploadResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload and index PDF documents",
+    summary="Upload and index documents (PDF, TXT, DOCX, CSV)",
     tags=["documents"],
 )
 async def upload_documents(
@@ -178,7 +179,9 @@ async def upload_documents(
     indexer: DocumentIndexer = Depends(get_indexer)
 ) -> UploadResponse:
     """
-    Upload one or more PDF files and automatically index their contents.
+    Upload one or more documents and automatically index their contents.
+
+    Supported formats: PDF, TXT, DOCX, CSV
 
     Returns metadata about the indexed documents including page and chunk counts.
     """
@@ -188,12 +191,14 @@ async def upload_documents(
             detail="No files provided",
         )
 
-    # Validate all files are PDFs
+    # Validate all files have supported extensions
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv'}
     for file in files:
-        if not file.filename.lower().endswith(".pdf"):
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in SUPPORTED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} is not a PDF",
+                detail=f"File {file.filename} has unsupported type. Supported types: PDF, TXT, DOCX, CSV",
             )
 
     indexed_docs = []
@@ -203,7 +208,7 @@ async def upload_documents(
     for file in files:
         try:
             # Save uploaded file
-            file_path = pdf_dir / file.filename
+            file_path = document_dir / file.filename
             with open(file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
 
@@ -294,12 +299,12 @@ async def list_documents(
         # Convert to DocumentMetadata objects
         doc_metadata_list = []
         for doc in documents:
-            # Get timestamp from PDF file modification time
-            pdf_path = pdf_dir / doc["filename"]
+            # Get timestamp from document file modification time
+            doc_path = document_dir / doc["filename"]
             indexed_at = ""
-            if pdf_path.exists():
+            if doc_path.exists():
                 from datetime import datetime
-                mtime = pdf_path.stat().st_mtime
+                mtime = doc_path.stat().st_mtime
                 indexed_at = datetime.fromtimestamp(mtime).isoformat()
 
             doc_metadata = DocumentMetadata(
@@ -326,7 +331,7 @@ async def list_documents(
 
 @app.get(
     "/documents/{document_id}/pdf",
-    summary="Download PDF file",
+    summary="Download document file",
     tags=["documents"],
     response_class=FileResponse,
 )
@@ -335,9 +340,9 @@ async def get_pdf(
     indexer: DocumentIndexer = Depends(get_indexer)
 ):
     """
-    Download the PDF file for a specific document.
+    Download the document file for a specific document.
 
-    The URL can include #page=N to open at a specific page in the browser.
+    For PDFs, the URL can include #page=N to open at a specific page in the browser.
     """
     try:
         # Get document metadata to find filename
@@ -350,21 +355,32 @@ async def get_pdf(
                 detail=f"Document {document_id} not found",
             )
 
-        # Find the PDF file
-        pdf_path = pdf_dir / doc["filename"]
+        # Find the document file
+        doc_path = document_dir / doc["filename"]
 
-        if not pdf_path.exists():
+        if not doc_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"PDF file not found: {doc['filename']}",
+                detail=f"Document file not found: {doc['filename']}",
             )
 
-        # Return PDF with inline display (not download)
+        # Determine media type based on file extension
+        file_ext = Path(doc["filename"]).suffix.lower()
+        media_types = {
+            '.pdf': 'application/pdf',
+            '.txt': 'text/plain',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.csv': 'text/csv',
+        }
+        media_type = media_types.get(file_ext, 'application/octet-stream')
+
+        # Return file with inline display for PDFs, download for others
+        disposition = 'inline' if file_ext == '.pdf' else 'attachment'
         return FileResponse(
-            path=pdf_path,
-            media_type="application/pdf",
+            path=doc_path,
+            media_type=media_type,
             headers={
-                "Content-Disposition": f'inline; filename="{doc["filename"]}"'
+                "Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'
             }
         )
 
@@ -394,7 +410,7 @@ async def delete_document(
     This will delete:
     - The document's metadata from the index
     - All chunks associated with the document
-    - The PDF file from the data/pdfs directory
+    - The document file from the data/documents directory
     """
     try:
         # Get document metadata before deletion to find the PDF filename
@@ -410,11 +426,11 @@ async def delete_document(
         # Delete from index
         num_deleted = indexer.delete_document(document_id)
 
-        # Delete PDF file from filesystem
-        pdf_path = pdf_dir / doc["filename"]
-        if pdf_path.exists():
-            pdf_path.unlink()
-            logger.info(f"Deleted PDF file: {doc['filename']}")
+        # Delete document file from filesystem
+        doc_path = document_dir / doc["filename"]
+        if doc_path.exists():
+            doc_path.unlink()
+            logger.info(f"Deleted document file: {doc['filename']}")
 
         # Persist the changes
         indexer.save_index()
@@ -423,7 +439,7 @@ async def delete_document(
             "message": f"Deleted document {document_id}",
             "filename": doc["filename"],
             "chunks_deleted": num_deleted,
-            "pdf_deleted": True,
+            "file_deleted": True,
         }
 
     except HTTPException:
