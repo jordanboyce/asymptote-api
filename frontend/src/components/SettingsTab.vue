@@ -51,20 +51,43 @@
       <div class="card-body">
         <h3 class="card-title">AI Integration</h3>
         <p class="text-sm text-base-content/70 mb-2">
-          Add your own Anthropic API key to enable AI-powered search enhancements.
-          Your key is stored only in your browser and sent directly to the Anthropic API per request.
+          Connect your own AI provider to get answers from your documents, not just search results.
+          Your key is stored only in your browser and sent per request. The server never stores it.
         </p>
+
+        <!-- Provider Selection -->
+        <div class="form-control mb-3">
+          <label class="label">
+            <span class="label-text">Provider</span>
+          </label>
+          <div class="flex gap-2">
+            <button
+              class="btn btn-sm flex-1"
+              :class="aiSettings.provider === 'anthropic' ? 'btn-primary' : 'btn-ghost'"
+              @click="setProvider('anthropic')"
+            >
+              Anthropic
+            </button>
+            <button
+              class="btn btn-sm flex-1"
+              :class="aiSettings.provider === 'openai' ? 'btn-primary' : 'btn-ghost'"
+              @click="setProvider('openai')"
+            >
+              OpenAI
+            </button>
+          </div>
+        </div>
 
         <!-- API Key Input -->
         <div class="form-control">
           <label class="label">
-            <span class="label-text">Anthropic API Key</span>
+            <span class="label-text">{{ aiSettings.provider === 'openai' ? 'OpenAI' : 'Anthropic' }} API Key</span>
           </label>
           <div class="join w-full">
             <input
               v-model="apiKey"
               :type="showKey ? 'text' : 'password'"
-              placeholder="sk-ant-..."
+              :placeholder="aiSettings.provider === 'openai' ? 'sk-...' : 'sk-ant-...'"
               class="input input-bordered join-item flex-1"
               @input="apiKeyDirty = true; apiKeyStatus = ''"
             />
@@ -82,8 +105,8 @@
           </div>
           <label class="label">
             <span class="label-text-alt">
-              Get a key at
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="link link-primary">console.anthropic.com</a>
+              <a v-if="aiSettings.provider === 'openai'" href="https://platform.openai.com/api-keys" target="_blank" class="link link-primary">Get an OpenAI key</a>
+              <a v-else href="https://console.anthropic.com/settings/keys" target="_blank" class="link link-primary">Get an Anthropic key</a>
             </span>
             <span v-if="apiKeyStatus === 'valid'" class="label-text-alt text-success font-semibold">Key valid</span>
             <span v-else-if="apiKeyStatus === 'invalid'" class="label-text-alt text-error font-semibold">Invalid key</span>
@@ -108,27 +131,15 @@
               <input
                 type="checkbox"
                 class="toggle toggle-primary toggle-sm"
-                :checked="aiSettings.enhanceQuery"
-                @change="toggleAI('enhanceQuery')"
-              />
-              <div>
-                <span class="label-text font-medium">Query Enhancement</span>
-                <p class="text-xs text-base-content/60">Expands your search with synonyms and related terms for better recall</p>
-              </div>
-            </label>
-          </div>
-
-          <div class="form-control">
-            <label class="label cursor-pointer justify-start gap-4">
-              <input
-                type="checkbox"
-                class="toggle toggle-primary toggle-sm"
                 :checked="aiSettings.rerank"
                 @change="toggleAI('rerank')"
               />
               <div>
                 <span class="label-text font-medium">Result Reranking</span>
-                <p class="text-xs text-base-content/60">AI reorders results by actual relevance instead of just vector similarity</p>
+                <p class="text-xs text-base-content/60">
+                  Vector search finds semantically similar text, but similar doesn't always mean relevant.
+                  Reranking uses AI to judge which results actually answer your question. Most useful with large document collections.
+                </p>
               </div>
             </label>
           </div>
@@ -143,13 +154,15 @@
               />
               <div>
                 <span class="label-text font-medium">Answer Synthesis</span>
-                <p class="text-xs text-base-content/60">Generates a summary answer with citations from search results</p>
+                <p class="text-xs text-base-content/60">
+                  Instead of reading through individual results, get a direct answer synthesized from your documents with citations back to specific pages.
+                </p>
               </div>
             </label>
           </div>
 
           <div class="text-xs text-base-content/50 mt-2">
-            Estimated cost per search: ~${{ estimatedCost }} (billed to your Anthropic account)
+            Estimated cost per search: ~${{ estimatedCost }} (billed to your {{ aiSettings.provider === 'openai' ? 'OpenAI' : 'Anthropic' }} account)
           </div>
         </div>
       </div>
@@ -314,18 +327,26 @@ const apiKeyStatus = ref('')
 const apiKeyDirty = ref(false)
 const hasStoredKey = ref(false)
 const aiSettings = ref({
-  enhanceQuery: true,
+  provider: 'anthropic',
   rerank: false,
   synthesize: false,
 })
 
 const estimatedCost = computed(() => {
   let cost = 0
-  if (aiSettings.value.enhanceQuery) cost += 0.0001
   if (aiSettings.value.rerank) cost += 0.0005
   if (aiSettings.value.synthesize) cost += 0.015
   return cost.toFixed(4)
 })
+
+const setProvider = (provider) => {
+  // If switching providers, clear the saved key since it won't work for the other
+  if (provider !== aiSettings.value.provider && hasStoredKey.value) {
+    removeKey()
+  }
+  aiSettings.value.provider = provider
+  localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
+}
 
 const validateAndSaveKey = async () => {
   if (!apiKey.value.trim()) return
@@ -334,10 +355,13 @@ const validateAndSaveKey = async () => {
 
   try {
     const response = await axios.post('/api/ai/validate-key', null, {
-      headers: { 'X-Anthropic-API-Key': apiKey.value.trim() }
+      headers: {
+        'X-AI-Key': apiKey.value.trim(),
+        'X-AI-Provider': aiSettings.value.provider,
+      }
     })
     if (response.data.valid) {
-      localStorage.setItem('anthropic_api_key', apiKey.value.trim())
+      localStorage.setItem('ai_api_key', apiKey.value.trim())
       localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
       hasStoredKey.value = true
       apiKeyDirty.value = false
@@ -353,13 +377,13 @@ const validateAndSaveKey = async () => {
 }
 
 const removeKey = () => {
-  localStorage.removeItem('anthropic_api_key')
-  localStorage.removeItem('ai_settings')
+  localStorage.removeItem('ai_api_key')
   apiKey.value = ''
   hasStoredKey.value = false
   apiKeyStatus.value = ''
   apiKeyDirty.value = false
-  aiSettings.value = { enhanceQuery: true, rerank: false, synthesize: false }
+  aiSettings.value = { ...aiSettings.value, rerank: false, synthesize: false }
+  localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
 }
 
 const toggleAI = (feature) => {
@@ -368,7 +392,7 @@ const toggleAI = (feature) => {
 }
 
 const loadAISettings = () => {
-  const storedKey = localStorage.getItem('anthropic_api_key')
+  const storedKey = localStorage.getItem('ai_api_key')
   if (storedKey) {
     apiKey.value = storedKey
     hasStoredKey.value = true
@@ -378,7 +402,12 @@ const loadAISettings = () => {
   const storedSettings = localStorage.getItem('ai_settings')
   if (storedSettings) {
     try {
-      aiSettings.value = JSON.parse(storedSettings)
+      const parsed = JSON.parse(storedSettings)
+      aiSettings.value = {
+        provider: parsed.provider || 'anthropic',
+        rerank: !!parsed.rerank,
+        synthesize: !!parsed.synthesize,
+      }
     } catch { /* use defaults */ }
   }
 }

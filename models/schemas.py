@@ -51,7 +51,7 @@ class UploadResponse(BaseModel):
 class AIOptions(BaseModel):
     """Optional AI enhancement settings for search."""
 
-    enhance_query: bool = Field(False, description="Expand query with synonyms and related terms")
+    provider: str = Field("anthropic", description="AI provider: 'anthropic' or 'openai'")
     rerank: bool = Field(False, description="Rerank results using AI for better relevance")
     synthesize: bool = Field(False, description="Generate an AI summary with citations")
 
@@ -76,7 +76,6 @@ class AIUsage(BaseModel):
     """AI usage metadata for cost transparency."""
 
     features_used: List[str] = Field(default_factory=list, description="AI features that were applied")
-    query_enhancement: Optional[AIUsageDetail] = None
     reranking: Optional[AIUsageDetail] = None
     synthesis: Optional[AIUsageDetail] = None
     total_input_tokens: int = Field(0, description="Total input tokens across all AI calls")
@@ -90,7 +89,6 @@ class SearchResponse(BaseModel):
     results: List[SearchResult] = Field(..., description="Ranked search results")
     total_results: int = Field(..., description="Total number of results returned")
     synthesis: Optional[str] = Field(None, description="AI-generated answer with citations")
-    enhanced_query: Optional[str] = Field(None, description="AI-expanded query (if enhancement was used)")
     ai_usage: Optional[AIUsage] = Field(None, description="AI token usage for cost transparency")
 
 

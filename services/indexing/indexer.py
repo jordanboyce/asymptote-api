@@ -8,8 +8,6 @@ from datetime import datetime
 
 from models.schemas import (
     DocumentMetadata,
-    ChunkMetadata,
-    SearchResult,
     AIOptions,
     AIUsage,
     AIUsageDetail,
@@ -128,26 +126,10 @@ class DocumentIndexer:
 
         ai_active = ai_service and ai_options
         ai_usage = AIUsage() if ai_active else None
-        enhanced_query = None
         synthesis = None
 
-        # Step 1: Optionally enhance the query
-        search_query = query
-        if ai_active and ai_options.enhance_query:
-            try:
-                result = ai_service.enhance_query(query)
-                search_query = result["enhanced_query"]
-                enhanced_query = search_query
-                usage = result["usage"]
-                ai_usage.features_used.append("query_enhancement")
-                ai_usage.query_enhancement = AIUsageDetail(**usage)
-                ai_usage.total_input_tokens += usage["input_tokens"]
-                ai_usage.total_output_tokens += usage["output_tokens"]
-            except Exception as e:
-                logger.warning(f"Query enhancement failed, using original query: {e}")
-
-        # Step 2: Generate query embedding and search
-        query_embedding = self.embedding_service.embed_query(search_query)
+        # Step 1: Generate query embedding and search
+        query_embedding = self.embedding_service.embed_query(query)
 
         # Fetch extra results if reranking (so the LLM has a bigger pool)
         fetch_k = min(top_k * 5, 50) if (ai_active and ai_options.rerank) else top_k
@@ -213,7 +195,6 @@ class DocumentIndexer:
 
         return {
             "results": results,
-            "enhanced_query": enhanced_query,
             "synthesis": synthesis,
             "ai_usage": ai_usage,
         }

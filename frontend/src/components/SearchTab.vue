@@ -68,9 +68,6 @@
           Answer
         </h3>
         <div class="prose prose-sm max-w-none whitespace-pre-wrap">{{ synthesis }}</div>
-        <div v-if="enhancedQuery" class="text-xs text-base-content/50 mt-2">
-          Enhanced query: "{{ enhancedQuery }}"
-        </div>
         <div v-if="aiUsage" class="text-xs text-base-content/40 mt-1">
           {{ aiUsage.features_used.join(', ') }}
           &middot; {{ aiUsage.total_input_tokens + aiUsage.total_output_tokens }} tokens
@@ -154,18 +151,17 @@ const error = ref('')
 const searched = ref(false)
 const lastQuery = ref('')
 const synthesis = ref('')
-const enhancedQuery = ref('')
 const aiUsage = ref(null)
 
 // Check if AI is configured
 const aiActive = computed(() => {
-  const key = localStorage.getItem('anthropic_api_key')
+  const key = localStorage.getItem('ai_api_key')
   if (!key) return false
   const settings = localStorage.getItem('ai_settings')
   if (!settings) return false
   try {
     const s = JSON.parse(settings)
-    return s.enhanceQuery || s.rerank || s.synthesize
+    return s.rerank || s.synthesize
   } catch { return false }
 })
 
@@ -173,10 +169,10 @@ const aiFeatureList = computed(() => {
   try {
     const s = JSON.parse(localStorage.getItem('ai_settings') || '{}')
     const features = []
-    if (s.enhanceQuery) features.push('Query Enhancement')
     if (s.rerank) features.push('Reranking')
     if (s.synthesize) features.push('Synthesis')
-    return features.join(', ')
+    const provider = (s.provider || 'anthropic') === 'openai' ? 'OpenAI' : 'Anthropic'
+    return features.length ? `${features.join(', ')} via ${provider}` : ''
   } catch { return '' }
 })
 
@@ -206,7 +202,6 @@ const search = async () => {
   searched.value = true
   lastQuery.value = query.value
   synthesis.value = ''
-  enhancedQuery.value = ''
   aiUsage.value = null
 
   try {
@@ -219,15 +214,15 @@ const search = async () => {
     const headers = {}
 
     // Include AI options if configured
-    const apiKey = localStorage.getItem('anthropic_api_key')
+    const storedKey = localStorage.getItem('ai_api_key')
     const aiSettingsRaw = localStorage.getItem('ai_settings')
-    if (apiKey && aiSettingsRaw) {
+    if (storedKey && aiSettingsRaw) {
       try {
         const s = JSON.parse(aiSettingsRaw)
-        if (s.enhanceQuery || s.rerank || s.synthesize) {
-          headers['X-Anthropic-API-Key'] = apiKey
+        if (s.rerank || s.synthesize) {
+          headers['X-AI-Key'] = storedKey
           body.ai = {
-            enhance_query: !!s.enhanceQuery,
+            provider: s.provider || 'anthropic',
             rerank: !!s.rerank,
             synthesize: !!s.synthesize
           }
@@ -239,7 +234,6 @@ const search = async () => {
 
     results.value = response.data.results
     synthesis.value = response.data.synthesis || ''
-    enhancedQuery.value = response.data.enhanced_query || ''
     aiUsage.value = response.data.ai_usage || null
     emit('stats-updated')
   } catch (err) {

@@ -1,41 +1,63 @@
-"""AI enhancement service using Anthropic Claude API.
+"""AI enhancement service supporting Anthropic and OpenAI providers.
 
 Provides optional AI-powered search enhancements:
-- Query enhancement: expand queries with synonyms and related terms
 - Result reranking: reorder results by actual relevance using LLM judgment
 - Result synthesis: generate a coherent answer with citations from top results
 
-All features require a user-provided Anthropic API key and degrade
-gracefully if the key is missing or API calls fail.
+Users provide their own API keys. Keys are never stored server-side.
 """
 
 import json
 import logging
 import time
-from typing import List, Optional
-
-import anthropic
+from abc import ABC, abstractmethod
+from typing import List
 
 logger = logging.getLogger(__name__)
 
 
-class AIService:
-    """Handles AI-powered search enhancements using user-provided API keys."""
+class AIProvider(ABC):
+    """Base class for LLM providers."""
 
-    QUERY_MODEL = "claude-haiku-4-5-20251001"
-    RERANK_MODEL = "claude-haiku-4-5-20251001"
-    SYNTHESIS_MODEL = "claude-sonnet-4-5-20250929"
+    @abstractmethod
+    def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
+        """Send a prompt and return {'text': str, 'usage': {'input_tokens': int, 'output_tokens': int, 'model': str}}."""
+
+    @abstractmethod
+    def validate(self) -> bool:
+        """Check if the API key is valid."""
+
+
+class AnthropicProvider(AIProvider):
+    """Anthropic Claude provider."""
+
+    FAST_MODEL = "claude-haiku-4-5-20251001"
+    QUALITY_MODEL = "claude-sonnet-4-5-20250929"
 
     def __init__(self, api_key: str):
+        import anthropic
         self.client = anthropic.Anthropic(api_key=api_key)
 
-    @staticmethod
-    def validate_key(api_key: str) -> bool:
-        """Check whether an API key is valid by making a minimal API call."""
+    def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return {
+            "text": response.content[0].text.strip(),
+            "usage": {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "model": model,
+            },
+        }
+
+    def validate(self) -> bool:
+        import anthropic
         try:
-            client = anthropic.Anthropic(api_key=api_key)
-            client.messages.create(
-                model=AIService.QUERY_MODEL,
+            self.client.messages.create(
+                model=self.FAST_MODEL,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hi"}],
             )
@@ -43,94 +65,104 @@ class AIService:
         except anthropic.AuthenticationError:
             return False
 
-    def enhance_query(self, query: str) -> dict:
-        """Expand a search query with synonyms and related terms.
 
-        Returns dict with 'enhanced_query' and 'usage' keys.
-        """
-        start = time.time()
-        response = self.client.messages.create(
-            model=self.QUERY_MODEL,
-            max_tokens=200,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "You are a search query expansion assistant. Given a user search query, "
-                        "produce an expanded version that includes synonyms, related terms, and "
-                        "alternate phrasings that would help find relevant documents.\n\n"
-                        "Rules:\n"
-                        "- Keep the original query terms\n"
-                        "- Add synonyms and closely related terms\n"
-                        "- Do NOT add unrelated concepts\n"
-                        "- Output ONLY the expanded query text, nothing else\n"
-                        "- Keep it under 100 words\n\n"
-                        f"Query: {query}"
-                    ),
-                }
-            ],
+class OpenAIProvider(AIProvider):
+    """OpenAI provider."""
+
+    FAST_MODEL = "gpt-4o-mini"
+    QUALITY_MODEL = "gpt-4o"
+
+    def __init__(self, api_key: str):
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key)
+
+    def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
+        response = self.client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
         )
-        enhanced = response.content[0].text.strip()
-        elapsed = time.time() - start
-        logger.info(f"Query enhanced in {elapsed:.2f}s: '{query}' -> '{enhanced[:80]}...'")
-
         return {
-            "enhanced_query": enhanced,
+            "text": response.choices[0].message.content.strip(),
             "usage": {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "model": self.QUERY_MODEL,
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "model": model,
             },
         }
+
+    def validate(self) -> bool:
+        from openai import AuthenticationError
+        try:
+            self.client.chat.completions.create(
+                model=self.FAST_MODEL,
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+            return True
+        except AuthenticationError:
+            return False
+
+
+def create_provider(provider_name: str, api_key: str) -> AIProvider:
+    """Create an AI provider instance."""
+    if provider_name == "anthropic":
+        return AnthropicProvider(api_key)
+    elif provider_name == "openai":
+        return OpenAIProvider(api_key)
+    else:
+        raise ValueError(f"Unknown provider: {provider_name}")
+
+
+class AIService:
+    """Provider-agnostic AI service for search enhancements."""
+
+    def __init__(self, provider: AIProvider):
+        self.provider = provider
+
+    @property
+    def fast_model(self) -> str:
+        return self.provider.FAST_MODEL
+
+    @property
+    def quality_model(self) -> str:
+        return self.provider.QUALITY_MODEL
 
     def rerank_results(
         self, query: str, results: List[dict], top_k: int
     ) -> dict:
         """Rerank search results by true relevance to the query.
 
-        Args:
-            query: original user query
-            results: list of dicts with 'index', 'filename', 'text_snippet', 'similarity_score'
-            top_k: how many results to return after reranking
-
-        Returns dict with 'reranked_indices' and 'usage' keys.
+        This is where AI adds genuine value over cosine similarity:
+        vectors measure semantic nearness, but an LLM can judge whether
+        a chunk actually answers the question.
         """
         if not results:
             return {"reranked_indices": [], "usage": None}
 
-        # Build a numbered list of snippets for the LLM
         snippets = []
         for r in results:
             snippets.append(f"[{r['index']}] (file: {r['filename']}) {r['text_snippet'][:200]}")
         snippet_text = "\n\n".join(snippets)
 
-        start = time.time()
-        response = self.client.messages.create(
-            model=self.RERANK_MODEL,
-            max_tokens=300,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "You are a search result reranking assistant. Given a query and numbered "
-                        "search results, return the indices of the most relevant results ordered "
-                        "from most to least relevant.\n\n"
-                        "Rules:\n"
-                        "- Return ONLY a JSON array of index numbers, e.g. [3, 1, 7, 2]\n"
-                        f"- Return at most {top_k} indices\n"
-                        "- Rank by actual relevance to the query, not just keyword overlap\n"
-                        "- Exclude results that are not relevant at all\n\n"
-                        f"Query: {query}\n\n"
-                        f"Results:\n{snippet_text}"
-                    ),
-                }
-            ],
+        prompt = (
+            "You are a search result reranking assistant. Given a query and numbered "
+            "search results, return the indices of the most relevant results ordered "
+            "from most to least relevant.\n\n"
+            "Rules:\n"
+            "- Return ONLY a JSON array of index numbers, e.g. [3, 1, 7, 2]\n"
+            f"- Return at most {top_k} indices\n"
+            "- Rank by actual relevance to the query, not just keyword overlap\n"
+            "- Exclude results that are not relevant at all\n\n"
+            f"Query: {query}\n\n"
+            f"Results:\n{snippet_text}"
         )
+
+        start = time.time()
+        response = self.provider.complete(prompt, max_tokens=300, model=self.fast_model)
         elapsed = time.time() - start
 
-        # Parse the JSON array from the response
-        raw = response.content[0].text.strip()
-        # Handle possible markdown code blocks
+        raw = response["text"]
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
@@ -147,26 +179,18 @@ class AIService:
 
         return {
             "reranked_indices": indices,
-            "usage": {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "model": self.RERANK_MODEL,
-            },
+            "usage": response["usage"],
         }
 
     def synthesize_results(self, query: str, results: List[dict]) -> dict:
         """Generate a coherent answer from search results with citations.
 
-        Args:
-            query: original user query
-            results: list of dicts with 'filename', 'page_number', 'text_snippet'
-
-        Returns dict with 'synthesis' and 'usage' keys.
+        This is the highest-value AI feature: it turns "here are 10 document
+        chunks" into "here is the answer to your question, with sources."
         """
         if not results:
             return {"synthesis": "", "usage": None}
 
-        # Build context from results
         context_parts = []
         for i, r in enumerate(results):
             context_parts.append(
@@ -175,39 +199,27 @@ class AIService:
             )
         context = "\n\n---\n\n".join(context_parts)
 
-        start = time.time()
-        response = self.client.messages.create(
-            model=self.SYNTHESIS_MODEL,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "You are a research assistant. Based on the search results below, "
-                        "provide a clear, concise answer to the user's query. Cite your sources "
-                        "using [Source N] notation.\n\n"
-                        "Rules:\n"
-                        "- Only use information from the provided sources\n"
-                        "- Cite specific sources for each claim using [Source N]\n"
-                        "- If the sources don't contain enough info, say so\n"
-                        "- Be concise but thorough\n"
-                        "- Use plain language\n\n"
-                        f"Query: {query}\n\n"
-                        f"Sources:\n{context}"
-                    ),
-                }
-            ],
+        prompt = (
+            "You are a research assistant. Based on the search results below, "
+            "provide a clear, concise answer to the user's query. Cite your sources "
+            "using [Source N] notation.\n\n"
+            "Rules:\n"
+            "- Only use information from the provided sources\n"
+            "- Cite specific sources for each claim using [Source N]\n"
+            "- If the sources don't contain enough info, say so\n"
+            "- Be concise but thorough\n"
+            "- Use plain language\n\n"
+            f"Query: {query}\n\n"
+            f"Sources:\n{context}"
         )
-        elapsed = time.time() - start
-        synthesis = response.content[0].text.strip()
 
-        logger.info(f"Synthesized answer in {elapsed:.2f}s ({len(synthesis)} chars)")
+        start = time.time()
+        response = self.provider.complete(prompt, max_tokens=1024, model=self.quality_model)
+        elapsed = time.time() - start
+
+        logger.info(f"Synthesized answer in {elapsed:.2f}s ({len(response['text'])} chars)")
 
         return {
-            "synthesis": synthesis,
-            "usage": {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "model": self.SYNTHESIS_MODEL,
-            },
+            "synthesis": response["text"],
+            "usage": response["usage"],
         }
