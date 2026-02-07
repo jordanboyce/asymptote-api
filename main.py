@@ -11,7 +11,7 @@ from typing import List
 from pathlib import Path
 import shutil
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Request
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,10 +23,12 @@ from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
 from services.vector_store_v2 import VectorStoreV2
 from services.indexing import DocumentIndexer
+from services.ai_service import AIService
 from models.schemas import (
     UploadResponse,
     SearchRequest,
     SearchResponse,
+    AIOptions,
     DocumentListResponse,
     DocumentMetadata,
 )
@@ -249,15 +251,33 @@ async def upload_documents(
 async def search_documents(
     search_request: SearchRequest,
     request: Request,
-    indexer: DocumentIndexer = Depends(get_indexer)
+    indexer: DocumentIndexer = Depends(get_indexer),
+    x_anthropic_api_key: str = Header(None),
 ) -> SearchResponse:
     """
     Perform semantic similarity search over indexed documents.
 
-    Returns ranked results with filename, page number, text snippet, and similarity score.
+    Optionally pass an Anthropic API key via the X-Anthropic-API-Key header
+    and include 'ai' options in the request body to enable AI enhancements.
     """
     try:
-        results = indexer.search(search_request.query, top_k=search_request.top_k)
+        # Build AI service if key provided and AI options requested
+        ai_service = None
+        ai_options = search_request.ai
+        if x_anthropic_api_key and ai_options:
+            try:
+                ai_service = AIService(api_key=x_anthropic_api_key)
+            except Exception as e:
+                logger.warning(f"Failed to create AI service: {e}")
+
+        search_result = indexer.search(
+            query=search_request.query,
+            top_k=search_request.top_k,
+            ai_service=ai_service,
+            ai_options=ai_options,
+        )
+
+        results = search_result["results"]
 
         # Add URLs to each result
         base_url = str(request.base_url).rstrip('/')
@@ -269,6 +289,9 @@ async def search_documents(
             query=search_request.query,
             results=results,
             total_results=len(results),
+            enhanced_query=search_result.get("enhanced_query"),
+            synthesis=search_result.get("synthesis"),
+            ai_usage=search_result.get("ai_usage"),
         )
 
     except Exception as e:
@@ -277,6 +300,24 @@ async def search_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}",
         )
+
+
+@app.post(
+    "/api/ai/validate-key",
+    summary="Validate an Anthropic API key",
+    tags=["ai"],
+)
+async def validate_api_key(x_anthropic_api_key: str = Header(...)):
+    """
+    Validate an Anthropic API key by making a minimal API call.
+
+    Pass the key via the X-Anthropic-API-Key header.
+    """
+    try:
+        valid = AIService.validate_key(x_anthropic_api_key)
+        return {"valid": valid}
+    except Exception:
+        return {"valid": False}
 
 
 @app.get(

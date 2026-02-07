@@ -1,12 +1,19 @@
 """Document indexing orchestration service."""
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import hashlib
 import logging
 from datetime import datetime
 
-from models.schemas import DocumentMetadata, ChunkMetadata, SearchResult
+from models.schemas import (
+    DocumentMetadata,
+    ChunkMetadata,
+    SearchResult,
+    AIOptions,
+    AIUsage,
+    AIUsageDetail,
+)
 from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
@@ -98,27 +105,118 @@ class DocumentIndexer:
         logger.info(f"Successfully indexed {filename}: {num_pages} pages, {num_chunks} chunks")
         return metadata
 
-    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        ai_service=None,
+        ai_options: Optional[AIOptions] = None,
+    ) -> dict:
         """
-        Search for documents matching the query.
+        Search for documents matching the query, with optional AI enhancements.
 
         Args:
             query: Search query text
             top_k: Number of results to return
+            ai_service: Optional AIService instance (created from user's API key)
+            ai_options: Optional AI feature flags
 
         Returns:
-            List of SearchResult objects
+            Dict with 'results', and optionally 'enhanced_query', 'synthesis', 'ai_usage'
         """
         logger.info(f"Searching for: {query[:100]}")
 
-        # Generate query embedding
-        query_embedding = self.embedding_service.embed_query(query)
+        ai_active = ai_service and ai_options
+        ai_usage = AIUsage() if ai_active else None
+        enhanced_query = None
+        synthesis = None
 
-        # Search vector store
-        results = self.vector_store.search(query_embedding, top_k=top_k)
+        # Step 1: Optionally enhance the query
+        search_query = query
+        if ai_active and ai_options.enhance_query:
+            try:
+                result = ai_service.enhance_query(query)
+                search_query = result["enhanced_query"]
+                enhanced_query = search_query
+                usage = result["usage"]
+                ai_usage.features_used.append("query_enhancement")
+                ai_usage.query_enhancement = AIUsageDetail(**usage)
+                ai_usage.total_input_tokens += usage["input_tokens"]
+                ai_usage.total_output_tokens += usage["output_tokens"]
+            except Exception as e:
+                logger.warning(f"Query enhancement failed, using original query: {e}")
+
+        # Step 2: Generate query embedding and search
+        query_embedding = self.embedding_service.embed_query(search_query)
+
+        # Fetch extra results if reranking (so the LLM has a bigger pool)
+        fetch_k = min(top_k * 5, 50) if (ai_active and ai_options.rerank) else top_k
+        results = self.vector_store.search(query_embedding, top_k=fetch_k)
+
+        # Step 3: Optionally rerank results
+        if ai_active and ai_options.rerank and len(results) > 0:
+            try:
+                rerank_input = [
+                    {
+                        "index": i,
+                        "filename": r.filename,
+                        "text_snippet": r.text_snippet,
+                        "similarity_score": r.similarity_score,
+                    }
+                    for i, r in enumerate(results)
+                ]
+                rerank_result = ai_service.rerank_results(query, rerank_input, top_k)
+                usage = rerank_result["usage"]
+
+                if usage:
+                    ai_usage.features_used.append("reranking")
+                    ai_usage.reranking = AIUsageDetail(**usage)
+                    ai_usage.total_input_tokens += usage["input_tokens"]
+                    ai_usage.total_output_tokens += usage["output_tokens"]
+
+                # Reorder results based on AI ranking
+                valid_indices = [
+                    i for i in rerank_result["reranked_indices"]
+                    if 0 <= i < len(results)
+                ]
+                results = [results[i] for i in valid_indices] if valid_indices else results[:top_k]
+            except Exception as e:
+                logger.warning(f"Reranking failed, using original order: {e}")
+                results = results[:top_k]
+        else:
+            results = results[:top_k]
+
+        # Step 4: Optionally synthesize an answer from results
+        if ai_active and ai_options.synthesize and len(results) > 0:
+            try:
+                synth_input = [
+                    {
+                        "filename": r.filename,
+                        "page_number": r.page_number,
+                        "text_snippet": r.text_snippet,
+                    }
+                    for r in results
+                ]
+                synth_result = ai_service.synthesize_results(query, synth_input)
+                synthesis = synth_result["synthesis"]
+                usage = synth_result["usage"]
+
+                if usage:
+                    ai_usage.features_used.append("synthesis")
+                    ai_usage.synthesis = AIUsageDetail(**usage)
+                    ai_usage.total_input_tokens += usage["input_tokens"]
+                    ai_usage.total_output_tokens += usage["output_tokens"]
+            except Exception as e:
+                logger.warning(f"Synthesis failed: {e}")
 
         logger.info(f"Found {len(results)} results")
-        return results
+
+        return {
+            "results": results,
+            "enhanced_query": enhanced_query,
+            "synthesis": synthesis,
+            "ai_usage": ai_usage,
+        }
 
     def list_documents(self) -> List[dict]:
         """

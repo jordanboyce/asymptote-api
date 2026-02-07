@@ -46,6 +46,115 @@
       </div>
     </div>
 
+    <!-- AI Integration -->
+    <div class="card bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title">AI Integration</h3>
+        <p class="text-sm text-base-content/70 mb-2">
+          Add your own Anthropic API key to enable AI-powered search enhancements.
+          Your key is stored only in your browser and sent directly to the Anthropic API per request.
+        </p>
+
+        <!-- API Key Input -->
+        <div class="form-control">
+          <label class="label">
+            <span class="label-text">Anthropic API Key</span>
+          </label>
+          <div class="join w-full">
+            <input
+              v-model="apiKey"
+              :type="showKey ? 'text' : 'password'"
+              placeholder="sk-ant-..."
+              class="input input-bordered join-item flex-1"
+              @input="apiKeyDirty = true; apiKeyStatus = ''"
+            />
+            <button class="btn join-item" @click="showKey = !showKey">
+              {{ showKey ? 'Hide' : 'Show' }}
+            </button>
+            <button
+              class="btn btn-primary join-item"
+              @click="validateAndSaveKey"
+              :disabled="validatingKey || !apiKey.trim()"
+            >
+              <span v-if="validatingKey" class="loading loading-spinner loading-xs"></span>
+              {{ validatingKey ? '' : 'Save' }}
+            </button>
+          </div>
+          <label class="label">
+            <span class="label-text-alt">
+              Get a key at
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="link link-primary">console.anthropic.com</a>
+            </span>
+            <span v-if="apiKeyStatus === 'valid'" class="label-text-alt text-success font-semibold">Key valid</span>
+            <span v-else-if="apiKeyStatus === 'invalid'" class="label-text-alt text-error font-semibold">Invalid key</span>
+            <span v-else-if="apiKeyStatus === 'saved'" class="label-text-alt text-success font-semibold">Saved</span>
+          </label>
+        </div>
+
+        <!-- Remove Key -->
+        <div v-if="hasStoredKey && !apiKeyDirty" class="mt-2">
+          <button class="btn btn-ghost btn-sm text-error" @click="removeKey">
+            Remove stored key
+          </button>
+        </div>
+
+        <!-- AI Feature Toggles -->
+        <div v-if="hasStoredKey" class="divider"></div>
+        <div v-if="hasStoredKey" class="space-y-3">
+          <h4 class="font-semibold text-sm">AI Features</h4>
+
+          <div class="form-control">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+                :checked="aiSettings.enhanceQuery"
+                @change="toggleAI('enhanceQuery')"
+              />
+              <div>
+                <span class="label-text font-medium">Query Enhancement</span>
+                <p class="text-xs text-base-content/60">Expands your search with synonyms and related terms for better recall</p>
+              </div>
+            </label>
+          </div>
+
+          <div class="form-control">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+                :checked="aiSettings.rerank"
+                @change="toggleAI('rerank')"
+              />
+              <div>
+                <span class="label-text font-medium">Result Reranking</span>
+                <p class="text-xs text-base-content/60">AI reorders results by actual relevance instead of just vector similarity</p>
+              </div>
+            </label>
+          </div>
+
+          <div class="form-control">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input
+                type="checkbox"
+                class="toggle toggle-primary toggle-sm"
+                :checked="aiSettings.synthesize"
+                @change="toggleAI('synthesize')"
+              />
+              <div>
+                <span class="label-text font-medium">Answer Synthesis</span>
+                <p class="text-xs text-base-content/60">Generates a summary answer with citations from search results</p>
+              </div>
+            </label>
+          </div>
+
+          <div class="text-xs text-base-content/50 mt-2">
+            Estimated cost per search: ~${{ estimatedCost }} (billed to your Anthropic account)
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Search Configuration -->
     <div class="card bg-base-200">
       <div class="card-body">
@@ -183,7 +292,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import axios from 'axios'
 
 const emit = defineEmits(['data-cleared'])
@@ -196,6 +305,83 @@ const clearing = ref(false)
 const clearSuccess = ref(false)
 const clearError = ref('')
 const clearModal = ref(null)
+
+// AI integration state
+const apiKey = ref('')
+const showKey = ref(false)
+const validatingKey = ref(false)
+const apiKeyStatus = ref('')
+const apiKeyDirty = ref(false)
+const hasStoredKey = ref(false)
+const aiSettings = ref({
+  enhanceQuery: true,
+  rerank: false,
+  synthesize: false,
+})
+
+const estimatedCost = computed(() => {
+  let cost = 0
+  if (aiSettings.value.enhanceQuery) cost += 0.0001
+  if (aiSettings.value.rerank) cost += 0.0005
+  if (aiSettings.value.synthesize) cost += 0.015
+  return cost.toFixed(4)
+})
+
+const validateAndSaveKey = async () => {
+  if (!apiKey.value.trim()) return
+  validatingKey.value = true
+  apiKeyStatus.value = ''
+
+  try {
+    const response = await axios.post('/api/ai/validate-key', null, {
+      headers: { 'X-Anthropic-API-Key': apiKey.value.trim() }
+    })
+    if (response.data.valid) {
+      localStorage.setItem('anthropic_api_key', apiKey.value.trim())
+      localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
+      hasStoredKey.value = true
+      apiKeyDirty.value = false
+      apiKeyStatus.value = 'valid'
+    } else {
+      apiKeyStatus.value = 'invalid'
+    }
+  } catch {
+    apiKeyStatus.value = 'invalid'
+  } finally {
+    validatingKey.value = false
+  }
+}
+
+const removeKey = () => {
+  localStorage.removeItem('anthropic_api_key')
+  localStorage.removeItem('ai_settings')
+  apiKey.value = ''
+  hasStoredKey.value = false
+  apiKeyStatus.value = ''
+  apiKeyDirty.value = false
+  aiSettings.value = { enhanceQuery: true, rerank: false, synthesize: false }
+}
+
+const toggleAI = (feature) => {
+  aiSettings.value[feature] = !aiSettings.value[feature]
+  localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
+}
+
+const loadAISettings = () => {
+  const storedKey = localStorage.getItem('anthropic_api_key')
+  if (storedKey) {
+    apiKey.value = storedKey
+    hasStoredKey.value = true
+    apiKeyDirty.value = false
+    apiKeyStatus.value = 'saved'
+  }
+  const storedSettings = localStorage.getItem('ai_settings')
+  if (storedSettings) {
+    try {
+      aiSettings.value = JSON.parse(storedSettings)
+    } catch { /* use defaults */ }
+  }
+}
 
 const loadHealth = async () => {
   loading.value = true
@@ -265,6 +451,7 @@ const clearAllData = async () => {
 
 onMounted(() => {
   loadHealth()
+  loadAISettings()
 
   // Load theme preference
   const savedTheme = localStorage.getItem('theme') || 'light'

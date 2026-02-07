@@ -43,12 +43,39 @@
       />
     </div>
 
+    <!-- AI Active Indicator -->
+    <div v-if="aiActive" class="flex items-center gap-2 text-sm text-base-content/60">
+      <span class="badge badge-primary badge-xs">AI</span>
+      <span>
+        {{ aiFeatureList }}
+        <span class="text-xs">(configure in Settings)</span>
+      </span>
+    </div>
+
     <!-- Error Alert -->
     <div v-if="error" class="alert alert-error">
       <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
       <span>{{ error }}</span>
+    </div>
+
+    <!-- AI Synthesis -->
+    <div v-if="synthesis" class="card bg-primary/5 border border-primary/20">
+      <div class="card-body">
+        <h3 class="card-title text-base">
+          <span class="badge badge-primary badge-sm">AI</span>
+          Answer
+        </h3>
+        <div class="prose prose-sm max-w-none whitespace-pre-wrap">{{ synthesis }}</div>
+        <div v-if="enhancedQuery" class="text-xs text-base-content/50 mt-2">
+          Enhanced query: "{{ enhancedQuery }}"
+        </div>
+        <div v-if="aiUsage" class="text-xs text-base-content/40 mt-1">
+          {{ aiUsage.features_used.join(', ') }}
+          &middot; {{ aiUsage.total_input_tokens + aiUsage.total_output_tokens }} tokens
+        </div>
+      </div>
     </div>
 
     <!-- Results -->
@@ -114,7 +141,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import axios from 'axios'
 
 const emit = defineEmits(['stats-updated'])
@@ -126,6 +153,36 @@ const loading = ref(false)
 const error = ref('')
 const searched = ref(false)
 const lastQuery = ref('')
+const synthesis = ref('')
+const enhancedQuery = ref('')
+const aiUsage = ref(null)
+
+// Check if AI is configured
+const aiActive = computed(() => {
+  const key = localStorage.getItem('anthropic_api_key')
+  if (!key) return false
+  const settings = localStorage.getItem('ai_settings')
+  if (!settings) return false
+  try {
+    const s = JSON.parse(settings)
+    return s.enhanceQuery || s.rerank || s.synthesize
+  } catch { return false }
+})
+
+const aiFeatureList = computed(() => {
+  try {
+    const s = JSON.parse(localStorage.getItem('ai_settings') || '{}')
+    const features = []
+    if (s.enhanceQuery) features.push('Query Enhancement')
+    if (s.rerank) features.push('Reranking')
+    if (s.synthesize) features.push('Synthesis')
+    return features.join(', ')
+  } catch { return '' }
+})
+
+const escapeRegExp = (str) => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 const highlightText = (text, searchQuery) => {
   if (!searchQuery) return text
@@ -134,7 +191,7 @@ const highlightText = (text, searchQuery) => {
   let result = text
 
   keywords.forEach(keyword => {
-    const regex = new RegExp(`(${keyword})`, 'gi')
+    const regex = new RegExp(`(${escapeRegExp(keyword)})`, 'gi')
     result = result.replace(regex, '<mark class="bg-yellow-300 dark:bg-yellow-600 px-1 rounded">$1</mark>')
   })
 
@@ -148,18 +205,47 @@ const search = async () => {
   error.value = ''
   searched.value = true
   lastQuery.value = query.value
+  synthesis.value = ''
+  enhancedQuery.value = ''
+  aiUsage.value = null
 
   try {
-    const response = await axios.post('/search', {
+    // Build request
+    const body = {
       query: query.value,
       top_k: topK.value
-    })
+    }
+
+    const headers = {}
+
+    // Include AI options if configured
+    const apiKey = localStorage.getItem('anthropic_api_key')
+    const aiSettingsRaw = localStorage.getItem('ai_settings')
+    if (apiKey && aiSettingsRaw) {
+      try {
+        const s = JSON.parse(aiSettingsRaw)
+        if (s.enhanceQuery || s.rerank || s.synthesize) {
+          headers['X-Anthropic-API-Key'] = apiKey
+          body.ai = {
+            enhance_query: !!s.enhanceQuery,
+            rerank: !!s.rerank,
+            synthesize: !!s.synthesize
+          }
+        }
+      } catch { /* skip AI */ }
+    }
+
+    const response = await axios.post('/search', body, { headers })
 
     results.value = response.data.results
+    synthesis.value = response.data.synthesis || ''
+    enhancedQuery.value = response.data.enhanced_query || ''
+    aiUsage.value = response.data.ai_usage || null
     emit('stats-updated')
   } catch (err) {
     error.value = err.response?.data?.detail || 'Search failed. Please try again.'
     results.value = []
+    synthesis.value = ''
   } finally {
     loading.value = false
   }
