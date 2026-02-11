@@ -84,7 +84,7 @@
 
       <!-- Tab Content -->
       <div class="bg-base-100 rounded-lg shadow-xl p-6">
-        <SearchTab v-if="activeTab === 'search'" @stats-updated="loadStats" />
+        <SearchTab v-if="activeTab === 'search'" @stats-updated="loadStats" @switch-tab="switchTab" />
         <UploadTab v-if="activeTab === 'upload'" @upload-complete="handleUploadComplete" />
         <DocumentsTab v-if="activeTab === 'documents'" @document-deleted="handleDocumentDeleted" />
         <SettingsTab v-if="activeTab === 'settings'" @data-cleared="handleDataCleared" />
@@ -150,6 +150,10 @@ const handleDocumentDeleted = () => {
 
 const handleDataCleared = () => {
   loadStats()
+}
+
+const switchTab = (tabName) => {
+  activeTab.value = tabName
 }
 
 onMounted(() => {

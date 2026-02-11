@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Multi-user mode (simple browser-based user isolation)
+    enable_multi_user: bool = False  # Set to True for per-user data isolation
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

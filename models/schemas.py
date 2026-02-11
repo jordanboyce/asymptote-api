@@ -1,6 +1,6 @@
 """Pydantic schemas for API request/response models."""
 
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -48,11 +48,38 @@ class UploadResponse(BaseModel):
     document_ids: List[str] = Field(..., description="List of created document IDs")
 
 
+class AIOptions(BaseModel):
+    """Optional AI enhancement settings for search."""
+
+    provider: str = Field("anthropic", description="AI provider: 'anthropic' or 'openai'")
+    rerank: bool = Field(False, description="Rerank results using AI for better relevance")
+    synthesize: bool = Field(False, description="Generate an AI summary with citations")
+
+
 class SearchRequest(BaseModel):
     """Request body for search endpoint."""
 
     query: str = Field(..., description="Search query text", min_length=1)
     top_k: int = Field(10, description="Number of results to return", ge=1, le=50)
+    ai: Optional[AIOptions] = Field(None, description="Optional AI enhancement settings")
+
+
+class AIUsageDetail(BaseModel):
+    """Token usage for a single AI operation."""
+
+    input_tokens: int = Field(..., description="Input tokens consumed")
+    output_tokens: int = Field(..., description="Output tokens consumed")
+    model: str = Field(..., description="Model used")
+
+
+class AIUsage(BaseModel):
+    """AI usage metadata for cost transparency."""
+
+    features_used: List[str] = Field(default_factory=list, description="AI features that were applied")
+    reranking: Optional[AIUsageDetail] = None
+    synthesis: Optional[AIUsageDetail] = None
+    total_input_tokens: int = Field(0, description="Total input tokens across all AI calls")
+    total_output_tokens: int = Field(0, description="Total output tokens across all AI calls")
 
 
 class SearchResponse(BaseModel):
@@ -61,6 +88,8 @@ class SearchResponse(BaseModel):
     query: str = Field(..., description="Original search query")
     results: List[SearchResult] = Field(..., description="Ranked search results")
     total_results: int = Field(..., description="Total number of results returned")
+    synthesis: Optional[str] = Field(None, description="AI-generated answer with citations")
+    ai_usage: Optional[AIUsage] = Field(None, description="AI token usage for cost transparency")
 
 
 class DocumentListResponse(BaseModel):

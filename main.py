@@ -11,7 +11,7 @@ from typing import List
 from pathlib import Path
 import shutil
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Request
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,6 +23,7 @@ from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
 from services.vector_store_v2 import VectorStoreV2
 from services.indexing import DocumentIndexer
+from services.ai_service import AIService, create_provider
 from models.schemas import (
     UploadResponse,
     SearchRequest,
@@ -249,15 +250,35 @@ async def upload_documents(
 async def search_documents(
     search_request: SearchRequest,
     request: Request,
-    indexer: DocumentIndexer = Depends(get_indexer)
+    indexer: DocumentIndexer = Depends(get_indexer),
+    x_ai_key: str = Header(None),
 ) -> SearchResponse:
     """
     Perform semantic similarity search over indexed documents.
 
-    Returns ranked results with filename, page number, text snippet, and similarity score.
+    Optionally pass an AI API key via the X-AI-Key header and include
+    'ai' options in the request body to enable AI enhancements.
+    Supports both Anthropic and OpenAI providers.
     """
     try:
-        results = indexer.search(search_request.query, top_k=search_request.top_k)
+        # Build AI service if key provided and AI options requested
+        ai_service = None
+        ai_options = search_request.ai
+        if x_ai_key and ai_options:
+            try:
+                provider = create_provider(ai_options.provider, x_ai_key)
+                ai_service = AIService(provider=provider)
+            except Exception as e:
+                logger.warning(f"Failed to create AI service: {e}")
+
+        search_result = indexer.search(
+            query=search_request.query,
+            top_k=search_request.top_k,
+            ai_service=ai_service,
+            ai_options=ai_options,
+        )
+
+        results = search_result["results"]
 
         # Add URLs to each result
         base_url = str(request.base_url).rstrip('/')
@@ -269,6 +290,8 @@ async def search_documents(
             query=search_request.query,
             results=results,
             total_results=len(results),
+            synthesis=search_result.get("synthesis"),
+            ai_usage=search_result.get("ai_usage"),
         )
 
     except Exception as e:
@@ -277,6 +300,38 @@ async def search_documents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}",
         )
+
+
+@app.post(
+    "/api/ai/validate-key",
+    summary="Validate an AI provider API key",
+    tags=["ai"],
+)
+async def validate_api_key(
+    x_ai_key: str = Header(...),
+    x_ai_provider: str = Header("anthropic"),
+):
+    """
+    Validate an API key by making a minimal API call.
+
+    Pass the key via X-AI-Key and the provider via X-AI-Provider header
+    ('anthropic' or 'openai').
+    """
+    try:
+        provider = create_provider(x_ai_provider, x_ai_key)
+        valid = provider.validate()
+        return {"valid": valid, "error": None}
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"API key validation error for {x_ai_provider}: {e}")
+
+        # Provide more helpful error messages
+        if "quota" in error_str.lower() or "insufficient_quota" in error_str.lower():
+            return {"valid": False, "error": "Your API key has exceeded its quota. Please add credits to your account."}
+        elif "rate" in error_str.lower() and "limit" in error_str.lower():
+            return {"valid": False, "error": "Rate limit exceeded. Please wait a moment and try again."}
+        else:
+            return {"valid": False, "error": error_str}
 
 
 @app.get(
