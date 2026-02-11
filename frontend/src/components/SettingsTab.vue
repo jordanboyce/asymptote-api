@@ -62,20 +62,27 @@
           </label>
           <div class="flex gap-2">
             <button
-              class="btn btn-sm flex-1"
+              class="btn btn-sm flex-1 relative"
               :class="aiSettings.provider === 'anthropic' ? 'btn-primary' : 'btn-ghost'"
               @click="setProvider('anthropic')"
             >
               Anthropic
+              <span v-if="hasAnthropicKey" class="absolute -top-1 -right-1 badge badge-success badge-xs">✓</span>
             </button>
             <button
-              class="btn btn-sm flex-1"
+              class="btn btn-sm flex-1 relative"
               :class="aiSettings.provider === 'openai' ? 'btn-primary' : 'btn-ghost'"
               @click="setProvider('openai')"
             >
               OpenAI
+              <span v-if="hasOpenAIKey" class="absolute -top-1 -right-1 badge badge-success badge-xs">✓</span>
             </button>
           </div>
+          <label v-if="hasBothKeys" class="label">
+            <span class="label-text-alt text-success">
+              ✓ Both providers configured - AI answers will use both
+            </span>
+          </label>
         </div>
 
         <!-- API Key Input -->
@@ -331,20 +338,24 @@ const aiSettings = ref({
   synthesize: false,
 })
 
+const hasAnthropicKey = computed(() => !!localStorage.getItem('ai_api_key_anthropic'))
+const hasOpenAIKey = computed(() => !!localStorage.getItem('ai_api_key_openai'))
+const hasBothKeys = computed(() => hasAnthropicKey.value && hasOpenAIKey.value)
+
 const estimatedCost = computed(() => {
   let cost = 0
-  if (aiSettings.value.rerank) cost += 0.0005
-  if (aiSettings.value.synthesize) cost += 0.015
+  const multiplier = hasBothKeys.value ? 2 : 1  // Double cost if using both providers
+  if (aiSettings.value.rerank) cost += 0.0005 * multiplier
+  if (aiSettings.value.synthesize) cost += 0.015 * multiplier
   return cost.toFixed(4)
 })
 
 const setProvider = (provider) => {
-  // If switching providers, clear the saved key since it won't work for the other
-  if (provider !== aiSettings.value.provider && hasStoredKey.value) {
-    removeKey()
-  }
   aiSettings.value.provider = provider
   localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
+
+  // Load the key for the selected provider
+  loadProviderKey()
 }
 
 const validateAndSaveKey = async () => {
@@ -361,7 +372,9 @@ const validateAndSaveKey = async () => {
       }
     })
     if (response.data.valid) {
-      localStorage.setItem('ai_api_key', apiKey.value.trim())
+      // Store key with provider-specific name
+      const keyName = `ai_api_key_${aiSettings.value.provider}`
+      localStorage.setItem(keyName, apiKey.value.trim())
       localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
       hasStoredKey.value = true
       apiKeyDirty.value = false
@@ -384,12 +397,19 @@ const validateAndSaveKey = async () => {
 }
 
 const removeKey = () => {
-  localStorage.removeItem('ai_api_key')
+  const keyName = `ai_api_key_${aiSettings.value.provider}`
+  localStorage.removeItem(keyName)
   apiKey.value = ''
   hasStoredKey.value = false
   apiKeyStatus.value = ''
   apiKeyDirty.value = false
-  aiSettings.value = { ...aiSettings.value, rerank: false, synthesize: false }
+
+  // Only disable AI features if both keys are removed
+  const hasAnthropicKey = localStorage.getItem('ai_api_key_anthropic')
+  const hasOpenAIKey = localStorage.getItem('ai_api_key_openai')
+  if (!hasAnthropicKey && !hasOpenAIKey) {
+    aiSettings.value = { ...aiSettings.value, rerank: false, synthesize: false }
+  }
   localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
 }
 
@@ -398,14 +418,23 @@ const toggleAI = (feature) => {
   localStorage.setItem('ai_settings', JSON.stringify(aiSettings.value))
 }
 
-const loadAISettings = () => {
-  const storedKey = localStorage.getItem('ai_api_key')
+const loadProviderKey = () => {
+  const keyName = `ai_api_key_${aiSettings.value.provider}`
+  const storedKey = localStorage.getItem(keyName)
   if (storedKey) {
     apiKey.value = storedKey
     hasStoredKey.value = true
     apiKeyDirty.value = false
     apiKeyStatus.value = 'saved'
+  } else {
+    apiKey.value = ''
+    hasStoredKey.value = false
+    apiKeyDirty.value = false
+    apiKeyStatus.value = ''
   }
+}
+
+const loadAISettings = () => {
   const storedSettings = localStorage.getItem('ai_settings')
   if (storedSettings) {
     try {
@@ -417,6 +446,9 @@ const loadAISettings = () => {
       }
     } catch { /* use defaults */ }
   }
+
+  // Load the key for the current provider
+  loadProviderKey()
 }
 
 const loadHealth = async () => {

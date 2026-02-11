@@ -39,11 +39,18 @@ open http://localhost:8000
 ### Docker
 
 ```bash
+# Standard deployment
 docker-compose up -d
 open http://localhost:8000
+
+# Corporate environment (with custom SSL certificates)
+docker-compose -f docker-compose.yml up -d --build
+# Note: Edit docker-compose.yml to use Dockerfile.corporate if needed
 ```
 
 **First time setup**: The embedding model (~90MB) will download automatically on first run.
+
+**SSL/TLS Support**: For corporate environments with custom CA certificates, see the [Corporate SSL Configuration](#corporate-ssl-configuration) section below.
 
 ### What You Get
 
@@ -59,8 +66,9 @@ Asymptote lets you:
 
 1. **Upload Documents** - Drop in PDF, TXT, DOCX, or CSV files (books, papers, manuals, data)
 2. **Semantic Search** - Ask questions in plain English, not just keywords
-3. **Get Results** - Find relevant passages with page numbers and direct document links
-4. **Scale Up** - Handle hundreds to thousands of documents locally
+3. **AI-Powered Answers** (Optional) - Integrate with Claude (Anthropic) or GPT (OpenAI) for intelligent result reranking and answer synthesis
+4. **Get Results** - Find relevant passages with page numbers and direct document links
+5. **Scale Up** - Handle hundreds to thousands of documents locally
 
 **Supported file types:** PDF, TXT, DOCX, CSV
 
@@ -102,6 +110,18 @@ Asymptote lets you:
 
 **What are embeddings?** They convert text to numbers that capture meaning. Similar meanings = similar numbers, enabling semantic search.
 
+### AI Integration (Optional)
+
+| Package | Version | Purpose | Used In |
+|---------|---------|---------|---------|
+| **anthropic** | 0.42.0 | Anthropic Claude API client for AI reranking and synthesis | `services/ai_service.py` |
+| **openai** | 1.59.5 | OpenAI GPT API client for AI reranking and synthesis | `services/ai_service.py` |
+
+**AI Features** (optional, requires API keys stored in browser localStorage):
+- **Result Reranking**: Uses AI to re-order search results by relevance
+- **Answer Synthesis**: Generates natural language answers from retrieved documents
+- **Multi-Provider**: Run both Claude and OpenAI simultaneously to compare responses
+
 ### Configuration & Data
 
 | Package | Version | Purpose | Used In |
@@ -121,6 +141,14 @@ Asymptote lets you:
 | **axios** | 1.13.4 | HTTP client for API requests | `frontend/src/components/*.vue` |
 
 **Modern UI Stack:** Built with Vue 3 Composition API, styled with Tailwind CSS 4 and DaisyUI 5 components, bundled with Vite for lightning-fast development and production builds.
+
+**Frontend Features:**
+- Dark/light theme with persistent preference
+- Sticky navigation tabs
+- Search history with caching (localStorage-based)
+- Real-time stats display (documents, pages, chunks)
+- Multi-provider AI selection (Anthropic, OpenAI, or both)
+- Responsive design for mobile and desktop
 
 ### Development & Testing
 
@@ -224,16 +252,20 @@ This compiles the Vue app and outputs static files to the `static/` directory (o
 
 ### Frontend Stack
 
-- **Framework**: Vue 3 with Composition API
+- **Framework**: Vue 3 with Composition API + Pinia for state management
 - **Build Tool**: Vite 7.3.1
 - **Styling**: Tailwind CSS 4.0 + DaisyUI 5.5
 - **HTTP Client**: Axios
 - **Features**:
   - Semantic search with keyword highlighting
-  - Multi-file PDF upload with progress tracking
-  - Document management with delete functionality
-  - Dark/light theme toggle
-  - Responsive design
+  - AI-powered answer synthesis (optional, with Claude/GPT)
+  - Search history with caching (localStorage-based, case-insensitive)
+  - Multi-file document upload (PDF, TXT, DOCX, CSV) with progress tracking
+  - Document management with bulk delete functionality
+  - Dark/light theme toggle with persistent preference
+  - Sticky navigation tabs
+  - Real-time stats in header (documents, pages, chunks)
+  - Responsive design for mobile and desktop
 
 ---
 
@@ -313,6 +345,92 @@ python migrate_to_sqlite.py
 
 See [METADATA_STORAGE.md](METADATA_STORAGE.md) for details.
 
+### AI Features (Optional)
+
+Asymptote supports optional AI integration for enhanced search results:
+
+**Features:**
+- **Result Reranking**: AI re-orders search results by semantic relevance
+- **Answer Synthesis**: AI generates natural language answers from retrieved documents
+- **Multi-Provider**: Use Anthropic Claude, OpenAI GPT, or both simultaneously
+
+**Setup:**
+1. Open the web interface at http://localhost:8000
+2. Navigate to the **Settings** tab
+3. Select your AI provider (Anthropic or OpenAI)
+4. Enter your API key (stored securely in browser localStorage, never sent to server)
+5. Enable desired features:
+   - **Reranking**: Improves result ordering (~$0.0005/search)
+   - **Synthesis**: Generates AI answers (~$0.015/search)
+
+**Multi-Provider Mode:**
+- If both Anthropic and OpenAI keys are configured, you can select which provider(s) to use per search
+- Compare responses side-by-side from both models
+- Selection preference persists between searches
+
+**Security Note:** API keys are stored only in your browser's localStorage and are sent directly to the AI providers. The Asymptote server never sees or stores your API keys.
+
+**Get API Keys:**
+- **Anthropic**: https://console.anthropic.com/
+- **OpenAI**: https://platform.openai.com/api-keys
+
+---
+
+### Corporate SSL Configuration
+
+For organizations using custom SSL certificates or corporate proxies:
+
+**Option 1: Use Dockerfile.corporate**
+
+Create a `certs/` directory and place your certificate file(s) inside:
+
+```bash
+mkdir certs
+# Copy your corporate CA certificate(s) - must be .crt files
+cp /path/to/your/cert.crt certs/
+```
+
+Build and run with the corporate Dockerfile:
+
+```bash
+# Option A: Direct docker build
+docker build -f Dockerfile.corporate -t asymptote-corporate .
+docker run -d -p 8000:8000 -v $(pwd)/data:/app/data asymptote-corporate
+
+# Option B: Edit docker-compose.yml to use Dockerfile.corporate
+# Change the dockerfile line under build:
+#   build:
+#     context: .
+#     dockerfile: Dockerfile.corporate
+# Then run:
+docker-compose up -d
+```
+
+**Important Notes:**
+- Certificate files must have `.crt` extension
+- Multiple certificates can be placed in `certs/` directory
+- The `certs/` directory is in `.gitignore` but NOT in `.dockerignore` (needed for build)
+
+**Option 2: Python Direct Configuration**
+
+For Python deployments, set the SSL certificate path:
+
+```bash
+# Add to .env
+SSL_CERT_FILE=/path/to/your/cert.crt
+# Or set environment variable
+export SSL_CERT_FILE=/path/to/your/cert.crt
+export REQUESTS_CA_BUNDLE=/path/to/your/cert.crt
+```
+
+**What this solves:**
+- Corporate proxy SSL interception
+- Custom CA certificates
+- Internal certificate authorities
+- SSL verification errors when downloading models or making AI API calls
+
+**Security Note:** The `certs/` directory is in `.gitignore` and `.dockerignore` to prevent accidental commit of certificates.
+
 ---
 
 ## API Usage
@@ -353,6 +471,7 @@ curl -X POST "http://localhost:8000/documents/upload" \
 
 ### Search Documents
 
+**Basic search:**
 ```bash
 curl -X POST "http://localhost:8000/search" \
   -H "Content-Type: application/json" \
@@ -362,7 +481,23 @@ curl -X POST "http://localhost:8000/search" \
   }'
 ```
 
-**Response:**
+**Search with AI features:**
+```bash
+curl -X POST "http://localhost:8000/search" \
+  -H "Content-Type: application/json" \
+  -H "X-AI-Key: your-api-key-here" \
+  -d '{
+    "query": "machine learning algorithms",
+    "top_k": 5,
+    "ai": {
+      "provider": "anthropic",
+      "rerank": true,
+      "synthesize": true
+    }
+  }'
+```
+
+**Response (basic search):**
 ```json
 {
   "query": "machine learning algorithms",
@@ -379,6 +514,22 @@ curl -X POST "http://localhost:8000/search" \
     }
   ],
   "total_results": 5
+}
+```
+
+**Response (with AI synthesis):**
+```json
+{
+  "query": "machine learning algorithms",
+  "results": [...],
+  "total_results": 5,
+  "synthesis": "Machine learning algorithms can be categorized into supervised, unsupervised, and reinforcement learning...",
+  "ai_usage": {
+    "provider": "anthropic",
+    "features_used": ["rerank", "synthesis"],
+    "total_input_tokens": 1523,
+    "total_output_tokens": 287
+  }
 }
 ```
 
@@ -682,6 +833,7 @@ asymptote/
 │   ├── vector_store.py       # FAISS index (JSON metadata)
 │   ├── vector_store_v2.py    # FAISS index (SQLite metadata)
 │   ├── metadata_store.py     # SQLite metadata storage
+│   ├── ai_service.py         # AI provider abstraction (Anthropic, OpenAI)
 │   └── indexing/
 │       └── indexer.py        # Orchestrates indexing pipeline
 │
@@ -692,13 +844,14 @@ asymptote/
 │   ├── tailwind.config.js    # Tailwind CSS configuration
 │   └── src/
 │       ├── main.js           # Vue app entry point
-│       ├── App.vue           # Root Vue component
+│       ├── App.vue           # Root Vue component with sticky tabs & theme toggle
 │       ├── style.css         # Global styles (Tailwind imports)
+│       ├── stores/
+│       │   └── searchStore.js    # Pinia store for search state & caching
 │       └── components/
-│           ├── SearchTab.vue      # Search interface
-│           ├── UploadTab.vue      # Document upload interface (PDF, TXT, DOCX, CSV)
-│           ├── DocumentsTab.vue   # Document management
-│           └── SettingsTab.vue    # Settings & info
+│           ├── SearchTab.vue      # Search interface with AI & history
+│           ├── DocumentsTab.vue   # Document upload & management
+│           └── SettingsTab.vue    # AI API keys & settings
 │
 ├── static/                    # Built frontend (generated by npm run build)
 │   ├── index.html            # Production HTML
@@ -711,9 +864,15 @@ asymptote/
 │   ├── documents/            # Uploaded documents (PDF, TXT, DOCX, CSV)
 │   └── indexes/              # FAISS + metadata
 │
+├── certs/                     # SSL certificates (gitignored)
+│   └── *.crt                 # Corporate CA certificates
+│
 ├── .env.example              # Configuration template
-├── Dockerfile                # Docker image
+├── Dockerfile                # Docker image (standard)
+├── Dockerfile.corporate      # Docker image (with SSL certificates)
 ├── docker-compose.yml        # Docker setup
+├── .dockerignore             # Docker build exclusions
+├── .gitignore                # Git exclusions (includes certs/)
 ├── migrate_to_sqlite.py      # Migrate JSON → SQLite
 ├── example_usage.py          # Python client example
 └── verify_setup.py           # Installation checker

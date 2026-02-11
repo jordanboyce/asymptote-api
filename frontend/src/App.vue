@@ -13,6 +13,24 @@
             </div>
           </div>
 
+          <!-- Stats -->
+          <div class="hidden md:flex items-center gap-6">
+            <div class="text-center">
+              <div class="text-2xl font-bold">{{ stats.documents }}</div>
+              <div class="text-xs text-primary-content/70">Documents</div>
+            </div>
+            <div class="divider divider-horizontal mx-0"></div>
+            <div class="text-center">
+              <div class="text-2xl font-bold">{{ stats.pages }}</div>
+              <div class="text-xs text-primary-content/70">Pages</div>
+            </div>
+            <div class="divider divider-horizontal mx-0"></div>
+            <div class="text-center">
+              <div class="text-2xl font-bold">{{ stats.chunks }}</div>
+              <div class="text-xs text-primary-content/70">Chunks</div>
+            </div>
+          </div>
+
           <!-- Theme Toggle -->
           <label class="swap swap-rotate btn btn-ghost btn-circle">
             <input type="checkbox" @change="toggleTheme" :checked="isDark" />
@@ -23,69 +41,54 @@
       </div>
     </header>
 
-    <!-- Stats -->
-    <div class="container mx-auto px-4 py-6">
-      <div class="stats shadow w-full bg-base-100">
-        <div class="stat">
-          <div class="stat-title">Total Documents</div>
-          <div class="stat-value text-primary">{{ stats.documents }}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-title">Total Pages</div>
-          <div class="stat-value text-secondary">{{ stats.pages }}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-title">Indexed Chunks</div>
-          <div class="stat-value">{{ stats.chunks }}</div>
+    <!-- Tabs Navigation (Sticky) -->
+    <div class="sticky top-[88px] z-40 bg-base-100 border-b border-base-300 shadow-md">
+      <div class="container mx-auto px-4">
+        <div role="tablist" class="tabs tabs-boxed bg-transparent gap-2 py-3">
+          <a
+            role="tab"
+            class="tab tab-lg font-semibold transition-all"
+            :class="{
+              'tab-active bg-primary text-primary-content': activeTab === 'search',
+              'hover:bg-base-200': activeTab !== 'search'
+            }"
+            @click="activeTab = 'search'"
+          >
+            <Search :size="20" class="mr-2" />
+            Search
+          </a>
+          <a
+            role="tab"
+            class="tab tab-lg font-semibold transition-all"
+            :class="{
+              'tab-active bg-primary text-primary-content': activeTab === 'documents',
+              'hover:bg-base-200': activeTab !== 'documents'
+            }"
+            @click="activeTab = 'documents'"
+          >
+            <FileText :size="20" class="mr-2" />
+            Documents
+          </a>
+          <a
+            role="tab"
+            class="tab tab-lg font-semibold transition-all"
+            :class="{
+              'tab-active bg-primary text-primary-content': activeTab === 'settings',
+              'hover:bg-base-200': activeTab !== 'settings'
+            }"
+            @click="activeTab = 'settings'"
+          >
+            <Settings :size="20" class="mr-2" />
+            Settings
+          </a>
         </div>
       </div>
     </div>
 
-    <!-- Tabs -->
-    <div class="container mx-auto px-4">
-      <div role="tablist" class="tabs tabs-bordered mb-6">
-        <a
-          role="tab"
-          class="tab"
-          :class="{ 'tab-active': activeTab === 'search' }"
-          @click="activeTab = 'search'"
-        >
-          <Search :size="20" class="mr-2" />
-          Search
-        </a>
-        <a
-          role="tab"
-          class="tab"
-          :class="{ 'tab-active': activeTab === 'upload' }"
-          @click="activeTab = 'upload'"
-        >
-          <Upload :size="20" class="mr-2" />
-          Upload
-        </a>
-        <a
-          role="tab"
-          class="tab"
-          :class="{ 'tab-active': activeTab === 'documents' }"
-          @click="activeTab = 'documents'"
-        >
-          <FileText :size="20" class="mr-2" />
-          Documents
-        </a>
-        <a
-          role="tab"
-          class="tab"
-          :class="{ 'tab-active': activeTab === 'settings' }"
-          @click="activeTab = 'settings'"
-        >
-          <Settings :size="20" class="mr-2" />
-          Settings
-        </a>
-      </div>
-
-      <!-- Tab Content -->
+    <!-- Tab Content -->
+    <div class="container mx-auto px-4 mt-6">
       <div class="bg-base-100 rounded-lg shadow-xl p-6">
         <SearchTab v-if="activeTab === 'search'" @stats-updated="loadStats" @switch-tab="switchTab" />
-        <UploadTab v-if="activeTab === 'upload'" @upload-complete="handleUploadComplete" />
         <DocumentsTab v-if="activeTab === 'documents'" @document-deleted="handleDocumentDeleted" />
         <SettingsTab v-if="activeTab === 'settings'" @data-cleared="handleDataCleared" />
       </div>
@@ -94,7 +97,7 @@
     <!-- Footer -->
     <footer class="footer footer-center p-10 bg-base-200 text-base-content mt-10">
       <aside>
-        <p class="font-bold">Asymptote API</p>
+        <p class="font-bold">Asymptote API Search</p>
         <p>Always approaching understanding, never quite reaching it.</p>
       </aside>
     </footer>
@@ -104,9 +107,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
-import { Search, Upload, FileText, Settings, Sun, Moon } from 'lucide-vue-next'
+import { Search, FileText, Settings, Sun, Moon } from 'lucide-vue-next'
 import SearchTab from './components/SearchTab.vue'
-import UploadTab from './components/UploadTab.vue'
 import DocumentsTab from './components/DocumentsTab.vue'
 import SettingsTab from './components/SettingsTab.vue'
 
@@ -137,11 +139,6 @@ const loadStats = async () => {
   } catch (error) {
     console.error('Error loading stats:', error)
   }
-}
-
-const handleUploadComplete = () => {
-  loadStats()
-  activeTab.value = 'documents'
 }
 
 const handleDocumentDeleted = () => {

@@ -1,9 +1,110 @@
 <template>
   <div class="space-y-6">
+    <h2 class="text-2xl font-bold">Documents</h2>
+
+    <!-- Upload Section -->
+    <div class="card bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title">Upload Documents</h3>
+
+        <!-- Upload Form -->
+        <div class="form-control w-full">
+          <input
+            ref="fileInput"
+            type="file"
+            multiple
+            accept=".pdf,.txt,.docx,.csv"
+            class="file-input file-input-bordered w-full"
+            @change="handleFileSelect"
+          />
+          <label class="label">
+            <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV)</span>
+          </label>
+        </div>
+
+        <!-- Selected Files -->
+        <div v-if="selectedFiles.length > 0" class="space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-semibold">{{ selectedFiles.length }} file{{ selectedFiles.length !== 1 ? 's' : '' }} selected ({{ formatTotalSize() }})</span>
+            <div class="flex gap-2">
+              <button
+                class="btn btn-ghost btn-sm"
+                @click="clearAllFiles"
+                :disabled="uploading"
+              >
+                Clear
+              </button>
+              <button
+                class="btn btn-primary btn-sm"
+                @click="upload"
+                :disabled="uploading || selectedFiles.length === 0"
+              >
+                <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
+                <CloudUpload v-else :size="16" />
+                {{ uploading ? 'Uploading...' : 'Upload Now' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Large File Warning -->
+          <div v-if="hasLargeFiles()" class="alert alert-warning alert-sm">
+            <AlertTriangle :size="20" />
+            <span class="text-xs">Large file(s) detected. Estimated time: {{ estimateProcessingTime() }}</span>
+          </div>
+
+          <!-- File List -->
+          <div class="overflow-x-auto max-h-48 overflow-y-auto border rounded">
+            <table class="table table-xs table-zebra">
+              <tbody>
+                <tr v-for="(file, index) in selectedFiles" :key="index">
+                  <td class="truncate" :title="file.name">{{ file.name }}</td>
+                  <td class="text-right">{{ formatFileSize(file.size) }}</td>
+                  <td class="w-8">
+                    <button
+                      class="btn btn-ghost btn-xs text-error"
+                      @click="removeFile(index)"
+                      :disabled="uploading"
+                    >
+                      <X :size="14" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div v-if="uploading" class="space-y-2">
+          <progress class="progress progress-primary w-full" :value="uploadProgress" max="100"></progress>
+          <p class="text-xs text-center">Processing files... {{ uploadProgress }}%</p>
+        </div>
+
+        <!-- Success Alert -->
+        <div v-if="uploadSuccess" class="alert alert-success alert-sm">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span class="text-xs">
+            Uploaded {{ uploadResult.documents_processed }} document(s) - {{ uploadResult.total_pages }} pages, {{ uploadResult.total_chunks }} chunks
+          </span>
+        </div>
+
+        <!-- Upload Error -->
+        <div v-if="uploadError" class="alert alert-error alert-sm">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span class="text-xs">{{ uploadError }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Document List Header -->
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-4">
-        <h2 class="text-2xl font-bold">Manage Documents</h2>
-        <div v-if="selectedDocuments.length > 0" class="badge badge-primary badge-lg">
+        <h3 class="text-lg font-bold">Your Documents</h3>
+        <div v-if="selectedDocuments.length > 0" class="badge badge-primary">
           {{ selectedDocuments.length }} selected
         </div>
       </div>
@@ -151,12 +252,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import axios from 'axios'
-import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle } from 'lucide-vue-next'
 
 const emit = defineEmits(['document-deleted'])
 
+// Upload state
+const fileInput = ref(null)
+const selectedFiles = ref([])
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadSuccess = ref(false)
+const uploadError = ref('')
+const uploadResult = ref({})
+
+// Document management state
 const documents = ref([])
 const loading = ref(false)
 const deleting = ref(false)
@@ -165,6 +276,121 @@ const deleteModal = ref(null)
 const documentToDelete = ref(null)
 const selectedDocuments = ref([])
 
+// Upload functions
+const handleFileSelect = (event) => {
+  const files = Array.from(event.target.files)
+  selectedFiles.value = files
+  uploadSuccess.value = false
+  uploadError.value = ''
+}
+
+const removeFile = (index) => {
+  selectedFiles.value.splice(index, 1)
+  if (selectedFiles.value.length === 0 && fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+const clearAllFiles = () => {
+  selectedFiles.value = []
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+  uploadSuccess.value = false
+  uploadError.value = ''
+}
+
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+const formatTotalSize = () => {
+  const total = selectedFiles.value.reduce((sum, file) => sum + file.size, 0)
+  return formatFileSize(total)
+}
+
+const hasLargeFiles = () => {
+  const ONE_MB = 1024 * 1024
+  return selectedFiles.value.some(file => file.size > ONE_MB)
+}
+
+const estimateProcessingTime = () => {
+  const totalBytes = selectedFiles.value.reduce((sum, file) => sum + file.size, 0)
+  const totalMB = totalBytes / (1024 * 1024)
+  const estimatedSeconds = Math.ceil(totalMB * 30)
+
+  if (estimatedSeconds < 60) {
+    return `~${estimatedSeconds} seconds`
+  } else {
+    const minutes = Math.ceil(estimatedSeconds / 60)
+    return `~${minutes} minute${minutes > 1 ? 's' : ''}`
+  }
+}
+
+const beforeUnloadHandler = (e) => {
+  if (uploading.value) {
+    e.preventDefault()
+    e.returnValue = 'Upload in progress. Are you sure you want to leave?'
+    return e.returnValue
+  }
+}
+
+const upload = async () => {
+  if (selectedFiles.value.length === 0) return
+
+  uploading.value = true
+  uploadProgress.value = 0
+  uploadSuccess.value = false
+  uploadError.value = ''
+
+  const formData = new FormData()
+  selectedFiles.value.forEach(file => {
+    formData.append('files', file)
+  })
+
+  try {
+    const progressInterval = setInterval(() => {
+      if (uploadProgress.value < 90) {
+        uploadProgress.value += 10
+      }
+    }, 500)
+
+    const response = await axios.post('/documents/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+
+    clearInterval(progressInterval)
+    uploadProgress.value = 100
+
+    uploadResult.value = response.data
+    uploadSuccess.value = true
+    selectedFiles.value = []
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
+
+    // Reload documents list
+    await loadDocuments()
+    emit('document-deleted')  // Reuse this event to trigger stats update
+
+    setTimeout(() => {
+      uploadSuccess.value = false
+    }, 5000)
+  } catch (err) {
+    console.error('Upload error:', err)
+    uploadError.value = err.response?.data?.detail || err.message || 'Upload failed. Please try again.'
+  } finally {
+    uploading.value = false
+  }
+}
+
+// Document management functions
 const isAllSelected = computed(() => {
   return documents.value.length > 0 && selectedDocuments.value.length === documents.value.length
 })
@@ -292,5 +518,10 @@ const deleteBulk = async () => {
 
 onMounted(() => {
   loadDocuments()
+  window.addEventListener('beforeunload', beforeUnloadHandler)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
 })
 </script>

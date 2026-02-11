@@ -86,6 +86,9 @@ desktop.ini
 # Docker
 .docker/
 
+# SSL Certificates
+certs/
+
 # MyPy
 .mypy_cache/
 .dmypy.json

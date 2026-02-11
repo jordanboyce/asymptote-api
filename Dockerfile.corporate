@@ -1,5 +1,5 @@
-# Asymptote API Dockerfile
-# Standard deployment without custom SSL certificates
+# Asymptote API Dockerfile (Corporate)
+# For environments requiring custom SSL certificates (corporate proxies, internal CAs)
 
 FROM python:3.13-slim as base
 
@@ -12,6 +12,17 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy and install corporate SSL certificates
+# Place your .crt files in the certs/ directory before building
+COPY certs/*.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+# Configure Python and tools to use system CA certificates
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
 # Copy requirements first for better caching
 COPY requirements.txt .
