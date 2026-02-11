@@ -63,7 +63,15 @@ class AnthropicProvider(AIProvider):
             )
             return True
         except anthropic.AuthenticationError:
+            logger.warning("Anthropic authentication failed")
             return False
+        except anthropic.RateLimitError as e:
+            # Quota/billing issues mean the key is valid but account has no credits
+            logger.warning(f"Anthropic key valid but quota/rate limit: {e}")
+            return True  # Key is valid, just no credits or rate limited
+        except Exception as e:
+            logger.error(f"Anthropic validation error: {e}")
+            raise
 
 
 class OpenAIProvider(AIProvider):
@@ -92,7 +100,7 @@ class OpenAIProvider(AIProvider):
         }
 
     def validate(self) -> bool:
-        from openai import AuthenticationError
+        from openai import AuthenticationError, RateLimitError
         try:
             self.client.chat.completions.create(
                 model=self.FAST_MODEL,
@@ -101,7 +109,21 @@ class OpenAIProvider(AIProvider):
             )
             return True
         except AuthenticationError:
+            logger.warning("OpenAI authentication failed")
             return False
+        except RateLimitError as e:
+            # Quota/billing issues mean the key is valid but account has no credits
+            # Check if it's a quota error vs rate limit
+            error_message = str(e)
+            if "quota" in error_message.lower() or "insufficient_quota" in error_message.lower():
+                logger.warning(f"OpenAI key valid but quota exceeded: {e}")
+                return True  # Key is valid, just no credits
+            else:
+                logger.warning(f"OpenAI rate limit: {e}")
+                return True  # Key is valid, just rate limited
+        except Exception as e:
+            logger.error(f"OpenAI validation error: {e}")
+            raise
 
 
 def create_provider(provider_name: str, api_key: str) -> AIProvider:

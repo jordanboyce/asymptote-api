@@ -320,9 +320,18 @@ async def validate_api_key(
     try:
         provider = create_provider(x_ai_provider, x_ai_key)
         valid = provider.validate()
-        return {"valid": valid}
-    except Exception:
-        return {"valid": False}
+        return {"valid": valid, "error": None}
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"API key validation error for {x_ai_provider}: {e}")
+
+        # Provide more helpful error messages
+        if "quota" in error_str.lower() or "insufficient_quota" in error_str.lower():
+            return {"valid": False, "error": "Your API key has exceeded its quota. Please add credits to your account."}
+        elif "rate" in error_str.lower() and "limit" in error_str.lower():
+            return {"valid": False, "error": "Rate limit exceeded. Please wait a moment and try again."}
+        else:
+            return {"valid": False, "error": error_str}
 
 
 @app.get(

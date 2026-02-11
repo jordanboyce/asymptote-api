@@ -108,10 +108,12 @@
               <a v-if="aiSettings.provider === 'openai'" href="https://platform.openai.com/api-keys" target="_blank" class="link link-primary">Get an OpenAI key</a>
               <a v-else href="https://console.anthropic.com/settings/keys" target="_blank" class="link link-primary">Get an Anthropic key</a>
             </span>
-            <span v-if="apiKeyStatus === 'valid'" class="label-text-alt text-success font-semibold">Key valid</span>
-            <span v-else-if="apiKeyStatus === 'invalid'" class="label-text-alt text-error font-semibold">Invalid key</span>
-            <span v-else-if="apiKeyStatus === 'saved'" class="label-text-alt text-success font-semibold">Saved</span>
+            <span v-if="apiKeyStatus === 'valid'" class="label-text-alt text-success font-semibold">✓ Key valid</span>
+            <span v-else-if="apiKeyStatus === 'invalid'" class="label-text-alt text-error font-semibold">✗ Invalid key</span>
+            <span v-else-if="apiKeyStatus === 'saved'" class="label-text-alt text-success font-semibold">✓ Saved</span>
+            <span v-else-if="apiKeyStatus === 'error'" class="label-text-alt text-error font-semibold">✗ Error validating</span>
           </label>
+          <div v-if="validationError" class="text-xs text-error mt-1 px-1">{{ validationError }}</div>
         </div>
 
         <!-- Remove Key -->
@@ -172,22 +174,18 @@
     <div class="card bg-base-200">
       <div class="card-body">
         <h3 class="card-title">Search Configuration</h3>
-        <div class="space-y-4">
-          <div class="form-control">
-            <label class="label">
-              <span class="label-text">Default Number of Results</span>
-            </label>
-            <input
-              v-model.number="defaultTopK"
-              type="number"
-              min="1"
-              max="50"
-              class="input input-bordered w-full max-w-xs"
-            />
-            <label class="label">
-              <span class="label-text-alt">Number of results to return by default (1-50)</span>
-            </label>
-          </div>
+        <div class="form-control">
+          <label class="label">
+            <span class="label-text">Default Number of Results</span>
+            <span class="label-text-alt">1-50</span>
+          </label>
+          <input
+            v-model.number="defaultTopK"
+            type="number"
+            min="1"
+            max="50"
+            class="input input-bordered w-full max-w-xs"
+          />
         </div>
       </div>
     </div>
@@ -326,6 +324,7 @@ const validatingKey = ref(false)
 const apiKeyStatus = ref('')
 const apiKeyDirty = ref(false)
 const hasStoredKey = ref(false)
+const validationError = ref('')
 const aiSettings = ref({
   provider: 'anthropic',
   rerank: false,
@@ -352,6 +351,7 @@ const validateAndSaveKey = async () => {
   if (!apiKey.value.trim()) return
   validatingKey.value = true
   apiKeyStatus.value = ''
+  validationError.value = ''
 
   try {
     const response = await axios.post('/api/ai/validate-key', null, {
@@ -366,11 +366,18 @@ const validateAndSaveKey = async () => {
       hasStoredKey.value = true
       apiKeyDirty.value = false
       apiKeyStatus.value = 'valid'
+      validationError.value = ''
     } else {
       apiKeyStatus.value = 'invalid'
+      if (response.data.error) {
+        validationError.value = response.data.error
+      } else {
+        validationError.value = 'The API key was rejected. Please check it and try again.'
+      }
     }
-  } catch {
-    apiKeyStatus.value = 'invalid'
+  } catch (err) {
+    apiKeyStatus.value = 'error'
+    validationError.value = err.response?.data?.detail || 'Network error. Check your connection and try again.'
   } finally {
     validatingKey.value = false
   }

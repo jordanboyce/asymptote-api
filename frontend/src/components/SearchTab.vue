@@ -52,6 +52,20 @@
       </span>
     </div>
 
+    <!-- AI Feature Prompt (when not configured) -->
+    <div v-if="!aiActive" class="alert alert-info">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+      </svg>
+      <div class="flex-1">
+        <h4 class="font-semibold">Want better search results?</h4>
+        <p class="text-sm">Add your AI API key in Settings to enable result reranking and AI-powered answer synthesis. Your key stays in your browser and is never stored on the server.</p>
+      </div>
+      <button class="btn btn-sm btn-primary" @click="$emit('switch-tab', 'settings')">
+        Go to Settings
+      </button>
+    </div>
+
     <!-- Error Alert -->
     <div v-if="error" class="alert alert-error">
       <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
@@ -141,7 +155,7 @@
 import { ref, computed } from 'vue'
 import axios from 'axios'
 
-const emit = defineEmits(['stats-updated'])
+const emit = defineEmits(['stats-updated', 'switch-tab'])
 
 const query = ref('')
 const topK = ref(10)
