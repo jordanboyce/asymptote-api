@@ -27,6 +27,22 @@ python verify_setup.py
 python migrate_to_sqlite.py
 ```
 
+### Desktop Application (Windows)
+
+```bash
+# Build Windows executable
+build_windows.bat
+
+# Create Windows installer
+build_installer.bat
+
+# Run desktop app manually
+python asymptote_desktop.py
+
+# Run in console mode (no system tray)
+python asymptote_desktop.py --no-tray
+```
+
 ### Frontend (Vue)
 
 ```bash

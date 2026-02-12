@@ -98,3 +98,9 @@ dmypy.json
 *.tmp
 *.temp
 ~*
+
+# Desktop build artifacts
+desktop/dist/
+desktop/build/
+installer_output/
+*.spec.log
