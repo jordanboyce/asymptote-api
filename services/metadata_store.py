@@ -263,3 +263,11 @@ class MetadataStore:
             """, (document_id,))
 
             return [row[0] for row in cursor.fetchall()]
+
+    def clear_all(self):
+        """Clear all chunks and documents from the metadata store."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM chunks")
+            conn.execute("DELETE FROM documents")
+            conn.commit()
+            logger.info("Cleared all metadata from database")

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         # Ensure data directories exist
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        (self.data_dir / "pdfs").mkdir(exist_ok=True)
+        (self.data_dir / "documents").mkdir(exist_ok=True)
         (self.data_dir / "indexes").mkdir(exist_ok=True)
 
 

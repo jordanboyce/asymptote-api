@@ -48,6 +48,29 @@ docker-compose -f docker-compose.yml up -d --build
 # Note: Edit docker-compose.yml to use Dockerfile.corporate if needed
 ```
 
+### Desktop Application (Windows)
+
+For a native Windows experience with system tray integration:
+
+```bash
+# Build Windows executable
+cd desktop
+build_windows.bat
+
+# Run the desktop app
+dist\AsymptoteDesktop.exe
+
+# Create installer (requires Inno Setup)
+build_installer.bat
+```
+
+**Desktop Features:**
+- System tray icon with quick access
+- Automatic port management (finds free port if 8000 is taken)
+- Native Windows application (no terminal needed)
+- Same functionality as web version
+- Opens browser automatically on startup
+
 **First time setup**: The embedding model (~90MB) will download automatically on first run.
 
 **SSL/TLS Support**: For corporate environments with custom CA certificates, see the [Corporate SSL Configuration](#corporate-ssl-configuration) section below.
@@ -275,7 +298,7 @@ Create a `.env` file to customize settings:
 
 ```bash
 # Data storage
-DATA_DIR=./data                          # Where PDFs and indexes are stored
+DATA_DIR=./data                          # Where documents and indexes are stored
 
 # Embedding model
 EMBEDDING_MODEL=all-MiniLM-L6-v2        # Default: fast, 384 dimensions
@@ -794,11 +817,14 @@ echo "EMBEDDING_MODEL=paraphrase-MiniLM-L3-v2" >> .env
 # Documents (all file types)
 data/documents/
 
-# FAISS index
-data/indexes/faiss.index
+# JSON metadata storage
+data/indexes/json/faiss.index
+data/indexes/json/metadata.json
+data/indexes/json/embeddings.npy
 
-# Metadata
-data/indexes/metadata.json   # or metadata.db
+# SQLite metadata storage
+data/indexes/sqlite/faiss.index
+data/indexes/sqlite/metadata.db
 ```
 
 **Backup script:**
@@ -857,12 +883,23 @@ asymptote/
 │   ├── index.html            # Production HTML
 │   └── assets/               # JS/CSS bundles
 │
+├── desktop/                   # Windows desktop application
+│   ├── asymptote_desktop.py  # Desktop wrapper with system tray
+│   ├── icon.ico              # Application icon
+│   ├── installer.iss         # Inno Setup installer script
+│   ├── build_windows.bat     # Build executable script
+│   ├── build_installer.bat   # Build installer script
+│   ├── requirements_desktop.txt  # Desktop-specific dependencies
+│   └── utils/                # Icon generation utilities
+│
 ├── tests/                     # Test suite
-│   └── test_api.py           # API tests
+│   └── test_api.py           # API tests (placeholder)
 │
 ├── data/                      # Runtime data (gitignored)
 │   ├── documents/            # Uploaded documents (PDF, TXT, DOCX, CSV)
 │   └── indexes/              # FAISS + metadata
+│       ├── json/             # JSON metadata storage
+│       └── sqlite/           # SQLite metadata storage
 │
 ├── certs/                     # SSL certificates (gitignored)
 │   └── *.crt                 # Corporate CA certificates

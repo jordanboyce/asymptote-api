@@ -7,8 +7,28 @@
       <div class="card-body">
         <h3 class="card-title">Upload Documents</h3>
 
-        <!-- Upload Form -->
-        <div class="form-control w-full">
+        <!-- Upload Mode Toggle -->
+        <div class="flex gap-2 mb-2">
+          <button
+            class="btn btn-sm"
+            :class="uploadMode === 'files' ? 'btn-primary' : 'btn-ghost'"
+            @click="setUploadMode('files')"
+          >
+            <FileText :size="16" class="mr-1" />
+            Select Files
+          </button>
+          <button
+            class="btn btn-sm"
+            :class="uploadMode === 'folder' ? 'btn-primary' : 'btn-ghost'"
+            @click="setUploadMode('folder')"
+          >
+            <FolderOpen :size="16" class="mr-1" />
+            Select Folder
+          </button>
+        </div>
+
+        <!-- File Upload Input -->
+        <div v-if="uploadMode === 'files'" class="form-control w-full">
           <input
             ref="fileInput"
             type="file"
@@ -19,6 +39,21 @@
           />
           <label class="label">
             <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV)</span>
+          </label>
+        </div>
+
+        <!-- Folder Upload Input -->
+        <div v-if="uploadMode === 'folder'" class="form-control w-full">
+          <input
+            ref="folderInput"
+            type="file"
+            webkitdirectory
+            directory
+            class="file-input file-input-bordered w-full"
+            @change="handleFolderSelect"
+          />
+          <label class="label">
+            <span class="label-text-alt">Select a folder - only supported file types will be uploaded (PDF, TXT, DOCX, CSV)</span>
           </label>
         </div>
 
@@ -179,7 +214,7 @@
             <td>
               <div class="flex gap-2">
                 <a
-                  :href="`/documents/${doc.document_id}/pdf`"
+                  :href="`/documents/${doc.document_id}/pdf?collection_id=${collectionStore.currentCollectionId}`"
                   target="_blank"
                   class="btn btn-ghost btn-xs"
                   title="View PDF"
@@ -252,20 +287,28 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from 'axios'
-import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle, FolderOpen } from 'lucide-vue-next'
+import { useCollectionStore } from '../stores/collectionStore'
 
 const emit = defineEmits(['document-deleted'])
 
+const collectionStore = useCollectionStore()
+
 // Upload state
 const fileInput = ref(null)
+const folderInput = ref(null)
+const uploadMode = ref('files')  // 'files' or 'folder'
 const selectedFiles = ref([])
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const uploadSuccess = ref(false)
 const uploadError = ref('')
 const uploadResult = ref({})
+
+// Supported file extensions
+const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.csv']
 
 // Document management state
 const documents = ref([])
@@ -277,11 +320,36 @@ const documentToDelete = ref(null)
 const selectedDocuments = ref([])
 
 // Upload functions
+const setUploadMode = (mode) => {
+  uploadMode.value = mode
+  clearAllFiles()
+}
+
 const handleFileSelect = (event) => {
   const files = Array.from(event.target.files)
   selectedFiles.value = files
   uploadSuccess.value = false
   uploadError.value = ''
+}
+
+const handleFolderSelect = (event) => {
+  const allFiles = Array.from(event.target.files)
+
+  // Filter to only supported file types
+  const supportedFiles = allFiles.filter(file => {
+    const ext = '.' + file.name.split('.').pop().toLowerCase()
+    return SUPPORTED_EXTENSIONS.includes(ext)
+  })
+
+  selectedFiles.value = supportedFiles
+  uploadSuccess.value = false
+  uploadError.value = ''
+
+  // Show info if some files were filtered out
+  const skippedCount = allFiles.length - supportedFiles.length
+  if (skippedCount > 0) {
+    uploadError.value = `${skippedCount} unsupported file(s) skipped. Only PDF, TXT, DOCX, and CSV files are supported.`
+  }
 }
 
 const removeFile = (index) => {
@@ -295,6 +363,9 @@ const clearAllFiles = () => {
   selectedFiles.value = []
   if (fileInput.value) {
     fileInput.value.value = ''
+  }
+  if (folderInput.value) {
+    folderInput.value.value = ''
   }
   uploadSuccess.value = false
   uploadError.value = ''
@@ -359,7 +430,8 @@ const upload = async () => {
       }
     }, 500)
 
-    const response = await axios.post('/documents/upload', formData, {
+    const collectionId = collectionStore.currentCollectionId
+    const response = await axios.post(`/documents/upload?collection_id=${collectionId}`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
       }
@@ -373,6 +445,9 @@ const upload = async () => {
     selectedFiles.value = []
     if (fileInput.value) {
       fileInput.value.value = ''
+    }
+    if (folderInput.value) {
+      folderInput.value.value = ''
     }
 
     // Reload documents list
@@ -426,7 +501,8 @@ const loadDocuments = async () => {
   error.value = ''
 
   try {
-    const response = await axios.get('/documents')
+    const collectionId = collectionStore.currentCollectionId
+    const response = await axios.get(`/documents?collection_id=${collectionId}`)
     documents.value = response.data.documents || []
   } catch (err) {
     error.value = err.response?.data?.detail || 'Failed to load documents'
@@ -460,7 +536,8 @@ const deleteDocument = async () => {
   error.value = ''
 
   try {
-    await axios.delete(`/documents/${documentToDelete.value.document_id}`)
+    const collectionId = collectionStore.currentCollectionId
+    await axios.delete(`/documents/${documentToDelete.value.document_id}?collection_id=${collectionId}`)
 
     // Remove from local list
     documents.value = documents.value.filter(
@@ -495,8 +572,9 @@ const deleteBulk = async () => {
 
   try {
     // Delete all selected documents
+    const collectionId = collectionStore.currentCollectionId
     for (const docId of selectedDocuments.value) {
-      await axios.delete(`/documents/${docId}`)
+      await axios.delete(`/documents/${docId}?collection_id=${collectionId}`)
     }
 
     // Remove deleted documents from local list
@@ -515,6 +593,12 @@ const deleteBulk = async () => {
     closeDeleteModal()
   }
 }
+
+// Watch for collection changes
+watch(() => collectionStore.currentCollectionId, () => {
+  loadDocuments()
+  selectedDocuments.value = []  // Clear selection when switching collections
+})
 
 onMounted(() => {
   loadDocuments()

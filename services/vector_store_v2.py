@@ -74,6 +74,13 @@ class VectorStoreV2:
             self.embeddings = None
             logger.info("Created new index")
 
+    def load(self):
+        """Reload the index from disk (public method for external reload)."""
+        logger.info("Reloading index from disk...")
+        self._load_or_create_index()
+        total_chunks = self.metadata_store.get_total_chunks()
+        logger.info(f"Reload complete. Total chunks: {total_chunks}")
+
     def add_chunks(self, chunks: List[ChunkMetadata], embeddings: np.ndarray):
         """
         Add chunks and their embeddings to the index.
@@ -230,4 +237,20 @@ class VectorStoreV2:
     def get_total_chunks(self) -> int:
         """Get the total number of chunks in the index."""
         return self.metadata_store.get_total_chunks()
+
+    def clear_index(self):
+        """Clear all data from the index and metadata store."""
+        logger.info("Clearing vector store index and metadata")
+
+        # Create new empty FAISS index
+        self.index = faiss.IndexFlatIP(self.embedding_dim)
+        self.embeddings = None
+
+        # Clear all metadata from database
+        self.metadata_store.clear_all()
+
+        # Save the empty index
+        self.save()
+
+        logger.info("Vector store cleared successfully")
 

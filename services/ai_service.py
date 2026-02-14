@@ -1,19 +1,65 @@
-"""AI enhancement service supporting Anthropic and OpenAI providers.
+"""AI enhancement service supporting Anthropic, OpenAI, and Ollama providers.
 
 Provides optional AI-powered search enhancements:
 - Result reranking: reorder results by actual relevance using LLM judgment
 - Result synthesis: generate a coherent answer with citations from top results
 
-Users provide their own API keys. Keys are never stored server-side.
+Users provide their own API keys for cloud providers (Anthropic, OpenAI).
+Ollama runs locally and requires no API key.
 """
 
 import json
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional, Dict
 
 logger = logging.getLogger(__name__)
+
+
+def detect_ollama(base_url: str = "http://localhost:11434") -> Dict:
+    """Detect if Ollama is running and list available models.
+
+    Returns:
+        dict with keys:
+            - available (bool): Whether Ollama is accessible
+            - models (list): List of available model dicts with 'name' and 'size'
+            - error (str, optional): Error message if detection failed
+    """
+    import httpx
+
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            response = client.get(f"{base_url.rstrip('/')}/api/tags")
+            response.raise_for_status()
+            data = response.json()
+
+            models = []
+            for model in data.get("models", []):
+                models.append({
+                    "name": model.get("name", ""),
+                    "size": model.get("size", 0),
+                    "modified_at": model.get("modified_at", ""),
+                })
+
+            return {
+                "available": True,
+                "models": models,
+                "base_url": base_url,
+            }
+
+    except httpx.ConnectError:
+        return {
+            "available": False,
+            "models": [],
+            "error": "Ollama is not running or not accessible",
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "models": [],
+            "error": str(e),
+        }
 
 
 class AIProvider(ABC):
@@ -126,12 +172,120 @@ class OpenAIProvider(AIProvider):
             raise
 
 
-def create_provider(provider_name: str, api_key: str) -> AIProvider:
-    """Create an AI provider instance."""
+class OllamaProvider(AIProvider):
+    """Ollama provider for local LLM inference."""
+
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.2"):
+        """Initialize Ollama provider.
+
+        Args:
+            base_url: Ollama API base URL (default: http://localhost:11434)
+            model: Model name to use (e.g., llama3.2, mistral, phi3)
+        """
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        # Ollama uses the model name for both fast and quality
+        # Users can override by specifying different models
+        self.FAST_MODEL = model
+        self.QUALITY_MODEL = model
+
+    def complete(self, prompt: str, max_tokens: int, model: str) -> dict:
+        """Generate completion using Ollama API."""
+        import httpx
+
+        try:
+            # Longer timeout for synthesis (5 minutes) - Ollama can be slow on CPU
+            with httpx.Client(timeout=300.0) as client:
+                response = client.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "num_predict": max_tokens,
+                            "temperature": 0.7,
+                        }
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                # Ollama doesn't provide token counts in the same way
+                # Estimate based on response length
+                text = data.get("response", "").strip()
+                estimated_input_tokens = len(prompt) // 4
+                estimated_output_tokens = len(text) // 4
+
+                return {
+                    "text": text,
+                    "usage": {
+                        "input_tokens": estimated_input_tokens,
+                        "output_tokens": estimated_output_tokens,
+                        "model": model,
+                    },
+                }
+        except Exception as e:
+            logger.error(f"Ollama completion error: {e}")
+            raise
+
+    def validate(self) -> bool:
+        """Check if Ollama is running and model is available."""
+        import httpx
+
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                # Check if Ollama is running
+                response = client.get(f"{self.base_url}/api/tags")
+                response.raise_for_status()
+
+                # Check if the specified model is available
+                data = response.json()
+                models = [m.get("name", "") for m in data.get("models", [])]
+
+                # Ollama model names can have tags (e.g., "llama3.2:latest")
+                # Check if our model exists with or without tag
+                model_exists = any(
+                    self.model in model_name or model_name.startswith(f"{self.model}:")
+                    for model_name in models
+                )
+
+                if not model_exists:
+                    logger.warning(f"Ollama model '{self.model}' not found. Available models: {models}")
+                    return False
+
+                logger.info(f"Ollama validation successful. Model '{self.model}' is available.")
+                return True
+
+        except httpx.ConnectError:
+            logger.warning("Ollama is not running or not accessible at {self.base_url}")
+            return False
+        except Exception as e:
+            logger.error(f"Ollama validation error: {e}")
+            return False
+
+
+def create_provider(provider_name: str, api_key: str = None, **kwargs) -> AIProvider:
+    """Create an AI provider instance.
+
+    Args:
+        provider_name: Provider name (anthropic, openai, ollama)
+        api_key: API key for cloud providers (not needed for Ollama)
+        **kwargs: Additional provider-specific arguments
+            - For Ollama: base_url (default: http://localhost:11434), model (default: llama3.2)
+    """
     if provider_name == "anthropic":
+        if not api_key:
+            raise ValueError("API key required for Anthropic")
         return AnthropicProvider(api_key)
     elif provider_name == "openai":
+        if not api_key:
+            raise ValueError("API key required for OpenAI")
         return OpenAIProvider(api_key)
+    elif provider_name == "ollama":
+        base_url = kwargs.get("base_url", "http://localhost:11434")
+        model = kwargs.get("model", "llama3.2")
+        return OllamaProvider(base_url=base_url, model=model)
     else:
         raise ValueError(f"Unknown provider: {provider_name}")
 

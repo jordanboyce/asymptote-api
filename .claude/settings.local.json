@@ -4,7 +4,11 @@
       "Bash(npm init:*)",
       "Bash(npm install:*)",
       "Bash(npm run build:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(rm:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(python -m py_compile:*)"
     ]
   }
 }

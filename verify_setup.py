@@ -57,12 +57,12 @@ def check_project_structure():
         "config.py",
         "requirements.txt",
         "models/schemas.py",
-        "services/pdf_extractor.py",
+        "services/document_extractor.py",
         "services/chunker.py",
         "services/embedder.py",
         "services/vector_store.py",
+        "services/vector_store_v2.py",
         "services/indexing/indexer.py",
-        "api/routes.py",
     ]
 
     missing = []
@@ -85,7 +85,7 @@ def check_data_directory():
 
     if not data_dir.exists():
         data_dir.mkdir(parents=True)
-        (data_dir / "pdfs").mkdir()
+        (data_dir / "documents").mkdir()
         (data_dir / "indexes").mkdir()
         print("✓ Created data directory")
     else:
@@ -99,10 +99,11 @@ def test_import():
     print("Testing module imports...", end=" ")
     try:
         from config import settings
-        from services.pdf_extractor import PDFExtractor
+        from services.document_extractor import DocumentExtractor
         from services.chunker import TextChunker
         from services.embedder import EmbeddingService
         from services.vector_store import VectorStore
+        from services.vector_store_v2 import VectorStoreV2
         from models.schemas import SearchRequest, SearchResponse
         print("✓ All modules import successfully")
         return True
