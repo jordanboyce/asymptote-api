@@ -8,21 +8,23 @@
         <h3 class="card-title">Upload Documents</h3>
 
         <!-- Upload Mode Toggle -->
-        <div class="flex gap-2 mb-2">
+        <div role="tablist" class="tabs tabs-bordered mb-2">
           <button
-            class="btn btn-sm"
-            :class="uploadMode === 'files' ? 'btn-primary' : 'btn-ghost'"
+            role="tab"
+            class="tab gap-2"
+            :class="{ 'tab-active': uploadMode === 'files' }"
             @click="setUploadMode('files')"
           >
-            <FileText :size="16" class="mr-1" />
+            <FileText :size="16" />
             Select Files
           </button>
           <button
-            class="btn btn-sm"
-            :class="uploadMode === 'folder' ? 'btn-primary' : 'btn-ghost'"
+            role="tab"
+            class="tab gap-2"
+            :class="{ 'tab-active': uploadMode === 'folder' }"
             @click="setUploadMode('folder')"
           >
-            <FolderOpen :size="16" class="mr-1" />
+            <FolderOpen :size="16" />
             Select Folder
           </button>
         </div>

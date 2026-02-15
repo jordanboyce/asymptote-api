@@ -25,7 +25,6 @@ pip-delete-this-directory.txt
 # Node.js / Frontend
 frontend/node_modules/
 node_modules/
-package-lock.json
 
 # Virtual environments
 venv/

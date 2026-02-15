@@ -235,14 +235,16 @@ async def upload_documents(
     for file in files:
         try:
             # Save uploaded file to collection's document directory
-            file_path = document_dir / file.filename
+            # Use only the basename to avoid directory traversal issues
+            safe_filename = Path(file.filename).name
+            file_path = document_dir / safe_filename
             with open(file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
 
-            logger.info(f"Saved uploaded file: {file.filename} to collection {collection_id}")
+            logger.info(f"Saved uploaded file: {safe_filename} to collection {collection_id}")
 
             # Index the document
-            doc_metadata = indexer.index_document(file_path, file.filename)
+            doc_metadata = indexer.index_document(file_path, safe_filename)
 
             # Register document with collection
             collection_service.add_document(collection_id, doc_metadata.document_id)
@@ -256,9 +258,9 @@ async def upload_documents(
             failed_docs.append({"filename": file.filename, "error": str(e)})
             # Clean up the saved file if indexing failed
             try:
-                file_path = document_dir / file.filename
-                if file_path.exists():
-                    file_path.unlink()
+                cleanup_path = document_dir / Path(file.filename).name
+                if cleanup_path.exists():
+                    cleanup_path.unlink()
             except Exception:
                 pass
             # Continue processing remaining files
