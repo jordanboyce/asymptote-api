@@ -338,6 +338,24 @@ class OllamaProvider(AIProvider):
 
 ## Future Considerations (v3.0+)
 
+### 0. Data Persistence Across Versions (Priority)
+- **Persistent indexes across updates**
+  - Collections and vector indexes should survive application updates without requiring re-indexing
+  - Store version metadata (schema version, embedding model version, FAISS index format) alongside data
+  - Detect version mismatches on startup and handle gracefully
+- **Automatic migration tooling**
+  - Migration scripts that run on startup when data format changes
+  - Support for incremental migrations (v1 → v2 → v3)
+  - Dry-run mode to preview migrations before applying
+- **Backup and restore**
+  - Export collections with their indexes as portable archives
+  - Import collections from backup files
+  - CLI tool for backup/restore operations
+- **Version compatibility matrix**
+  - Document which data formats are compatible with which application versions
+  - Warn users before breaking upgrades
+  - Option to keep old data directory when upgrading
+
 ### 1. Format-Aware Indexing & Search (Priority)
 - **Row-level indexing for CSV/tabular data**
   - Each row indexed as its own chunk with headers embedded
