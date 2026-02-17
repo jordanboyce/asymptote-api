@@ -78,8 +78,14 @@ class VectorStoreV2:
         """Reload the index from disk (public method for external reload)."""
         logger.info("Reloading index from disk...")
         self._load_or_create_index()
-        total_chunks = self.metadata_store.get_total_chunks()
-        logger.info(f"Reload complete. Total chunks: {total_chunks}")
+
+    def close(self):
+        """Close the vector store and release resources."""
+        logger.info("Closing vector store...")
+        # Clear references to allow garbage collection
+        self.index = None
+        self.embeddings = None
+        self.metadata_store = None
 
     def add_chunks(self, chunks: List[ChunkMetadata], embeddings: np.ndarray):
         """
@@ -157,6 +163,12 @@ class VectorStoreV2:
                 chunk_id=chunk["chunk_id"],
                 pdf_url="",  # Will be populated by the API endpoint
                 page_url="",  # Will be populated by the API endpoint
+                # v3.0: Format-aware metadata
+                source_format=chunk.get("source_format"),
+                extraction_method=chunk.get("extraction_method"),
+                csv_row_number=chunk.get("csv_row_number"),
+                csv_columns=chunk.get("csv_columns"),
+                csv_values=chunk.get("csv_values"),
             )
             results.append(result)
 

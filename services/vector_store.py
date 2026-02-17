@@ -169,6 +169,12 @@ class VectorStore:
                 chunk_id=chunk["chunk_id"],
                 pdf_url="",  # Will be populated by the API endpoint
                 page_url="",  # Will be populated by the API endpoint
+                # v3.0: Format-aware metadata
+                source_format=chunk.get("source_format"),
+                extraction_method=chunk.get("extraction_method"),
+                csv_row_number=chunk.get("csv_row_number"),
+                csv_columns=chunk.get("csv_columns"),
+                csv_values=chunk.get("csv_values"),
             )
             results.append(result)
 

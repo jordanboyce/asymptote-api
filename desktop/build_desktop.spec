@@ -19,8 +19,8 @@ a = Analysis(
     datas=[
         # Include the entire static folder (frontend build)
         (os.path.join(project_root, 'static'), 'static'),
-        # Include the data directory structure (will be populated at runtime)
-        (os.path.join(project_root, 'data'), 'data'),
+        # NOTE: data/ directory is NOT included - it's created at runtime
+        # This prevents accidentally bundling user data, API keys, or indexed documents
         # Include .env.example as template
         (os.path.join(project_root, '.env.example'), '.'),
         # Include desktop icon for tray

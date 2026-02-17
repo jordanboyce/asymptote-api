@@ -29,12 +29,17 @@ from services.config_manager import config_manager
 from services.reindex_service import reindex_service
 from services.collection_service import collection_service
 from services.indexer_manager import indexer_manager
+from services.backup_service import BackupService
+from services.index_repair import IndexRepairService
 from models.schemas import (
     UploadResponse,
     SearchRequest,
     SearchResponse,
     DocumentListResponse,
     DocumentMetadata,
+    AskRequest,
+    AskResponse,
+    AskSource,
 )
 
 # Configure logging
@@ -469,6 +474,365 @@ async def validate_api_key(
             return {"valid": False, "error": "Rate limit exceeded. Please wait a moment and try again."}
         else:
             return {"valid": False, "error": error_str}
+
+
+@app.post(
+    "/api/ask",
+    response_model=AskResponse,
+    summary="Ask a question about indexed documents",
+    tags=["agent"],
+)
+async def ask_question(
+    request: AskRequest,
+    x_ai_key: str = Header(None),
+    x_ai_provider: str = Header("anthropic"),
+    x_ollama_model: str = Header(None),
+):
+    """
+    Ask a question and get a synthesized answer from indexed documents.
+
+    This endpoint is optimized for coding agents and AI assistants.
+
+    **Processing Flow**:
+    1. **Search**: Vector similarity search finds relevant document chunks
+    2. **Rerank** (optional, default=true): AI reorders results by actual relevance
+    3. **Synthesis**: AI generates coherent answer with citations
+    4. **Response**: Clean, structured response returned to agent
+
+    **API Key Options** (in order of precedence):
+    1. Pass via X-AI-Key header (per-request)
+    2. Use server-stored key (configured via /api/agent/config)
+    3. For Ollama: no key needed, just set X-AI-Provider: ollama
+
+    **Response Formats**:
+    - `markdown`: Answer with markdown formatting and source citations
+    - `text`: Plain text answer with inline citations
+    - `json`: Structured JSON with answer and sources array
+
+    **Token Usage**:
+    - Rerank uses a fast model (lower cost) to judge relevance
+    - Synthesis uses a quality model for answer generation
+    - `tokens_used` in response is the total across both operations
+
+    Example usage with curl:
+    ```bash
+    # Using header key
+    curl -X POST http://localhost:8000/api/ask \\
+      -H "Content-Type: application/json" \\
+      -H "X-AI-Key: your-api-key" \\
+      -d '{"question": "How do I configure the API?", "collection_id": "docs"}'
+
+    # Using server-stored key (no header needed)
+    curl -X POST http://localhost:8000/api/ask \\
+      -H "Content-Type: application/json" \\
+      -d '{"question": "How do I configure the API?"}'
+
+    # Skip reranking for faster response (lower quality)
+    curl -X POST http://localhost:8000/api/ask \\
+      -H "Content-Type: application/json" \\
+      -d '{"question": "How do I configure the API?", "rerank": false}'
+    ```
+    """
+    from services.app_database import app_db
+    import time
+    start_time = time.time()
+
+    # Validate AI provider is configured
+    if x_ai_provider == "ollama":
+        model = x_ollama_model or "llama3.2"
+        try:
+            provider = create_provider("ollama", model=model)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Ollama not available: {e}",
+            )
+    else:
+        # Try header key first, then fall back to server-stored key
+        api_key = x_ai_key or app_db.get_agent_api_key(x_ai_provider)
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"No API key configured for {x_ai_provider}. "
+                       f"Either pass X-AI-Key header or configure via /api/agent/config.",
+            )
+        try:
+            provider = create_provider(x_ai_provider, api_key)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+    # Get indexer for the collection
+    try:
+        indexer = get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    # Search for relevant chunks
+    try:
+        search_results = indexer.vector_store.search(
+            indexer.embedding_service.embed_query(request.question),
+            top_k=request.top_k,
+        )
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Search failed: {e}",
+        )
+
+    if not search_results:
+        return AskResponse(
+            answer="No relevant documents found for your question.",
+            sources=[],
+            collection_id=request.collection_id,
+            model=provider.QUALITY_MODEL,
+            tokens_used=0,
+        )
+
+    # Track total token usage
+    total_tokens = 0
+    ai_service = AIService(provider=provider)
+
+    # Rerank results if enabled (improves answer quality)
+    if request.rerank:
+        try:
+            # Convert search results to format expected by rerank
+            results_for_rerank = [
+                {
+                    "index": i,
+                    "filename": r.filename,
+                    "text_snippet": r.text_snippet,
+                    "page_number": r.page_number,
+                    "similarity_score": r.similarity_score,
+                }
+                for i, r in enumerate(search_results)
+            ]
+
+            rerank_result = ai_service.rerank_results(
+                request.question, results_for_rerank, request.top_k
+            )
+
+            if rerank_result["usage"]:
+                total_tokens += (
+                    rerank_result["usage"]["input_tokens"] +
+                    rerank_result["usage"]["output_tokens"]
+                )
+
+            # Reorder search results based on reranking
+            reranked_indices = rerank_result["reranked_indices"]
+            if reranked_indices:
+                search_results = [
+                    search_results[i]
+                    for i in reranked_indices
+                    if i < len(search_results)
+                ]
+                logger.info(f"Reranked to {len(search_results)} results")
+
+        except Exception as e:
+            logger.warning(f"Reranking failed, using original order: {e}")
+
+    # Build context for AI synthesis
+    context_parts = []
+    sources = []
+    for i, result in enumerate(search_results):
+        # Truncate excerpt if needed
+        excerpt = result.text_snippet
+        if len(excerpt) > request.max_source_length:
+            excerpt = excerpt[:request.max_source_length] + "..."
+
+        context_parts.append(
+            f"[Source {i + 1}: {result.filename}, page {result.page_number}]\n"
+            f"{result.text_snippet}"
+        )
+
+        if request.include_sources:
+            sources.append(AskSource(
+                filename=result.filename,
+                page=result.page_number,
+                excerpt=excerpt,
+                relevance=round(result.similarity_score, 3),
+            ))
+
+    context = "\n\n---\n\n".join(context_parts)
+
+    # Build the synthesis prompt based on format
+    if request.format == "json":
+        format_instruction = (
+            "Provide your answer as valid JSON with the structure: "
+            '{"answer": "your answer here", "key_points": ["point 1", "point 2"]}'
+        )
+    elif request.format == "text":
+        format_instruction = (
+            "Provide your answer as plain text. Use inline citations like "
+            "[Source 1] when referencing information."
+        )
+    else:  # markdown
+        format_instruction = (
+            "Format your answer using markdown. Use headers, lists, and code blocks "
+            "as appropriate. Cite sources using [Source N] notation."
+        )
+
+    prompt = (
+        "You are a knowledgeable assistant helping answer questions based on "
+        "indexed documentation. Answer the question using ONLY the provided sources.\n\n"
+        "Rules:\n"
+        "- Only use information from the provided sources\n"
+        "- Cite specific sources for each claim using [Source N]\n"
+        "- If the sources don't contain enough information to fully answer, say so\n"
+        "- Be concise but thorough\n"
+        f"- {format_instruction}\n\n"
+        f"Question: {request.question}\n\n"
+        f"Sources:\n{context}"
+    )
+
+    # Generate answer
+    try:
+        response = provider.complete(prompt, max_tokens=1500, model=provider.QUALITY_MODEL)
+        answer = response["text"]
+        total_tokens += response["usage"]["input_tokens"] + response["usage"]["output_tokens"]
+        model_used = response["usage"]["model"]
+    except Exception as e:
+        logger.error(f"AI synthesis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI synthesis failed: {e}",
+        )
+
+    elapsed = time.time() - start_time
+    logger.info(f"Ask query completed in {elapsed:.2f}s using {model_used}")
+
+    return AskResponse(
+        answer=answer,
+        sources=sources,
+        collection_id=request.collection_id,
+        model=model_used,
+        tokens_used=total_tokens,
+    )
+
+
+@app.get(
+    "/api/agent/config",
+    summary="Get agent API configuration",
+    tags=["agent"],
+)
+async def get_agent_config():
+    """
+    Get the current agent API configuration.
+
+    Returns which providers have API keys configured (keys are masked for security).
+    """
+    from services.app_database import app_db
+    return app_db.get_agent_config()
+
+
+@app.post(
+    "/api/agent/config",
+    summary="Configure agent API key",
+    tags=["agent"],
+)
+async def set_agent_config(
+    provider: str,
+    api_key: str,
+):
+    """
+    Store an API key for agent use.
+
+    This allows the /api/ask endpoint to work without requiring
+    the X-AI-Key header on every request.
+
+    Args:
+        provider: AI provider name (anthropic, openai)
+        api_key: The API key to store
+
+    Note: Keys are stored server-side. For security, ensure your
+    Asymptote instance is properly secured.
+    """
+    from services.app_database import app_db
+
+    if provider not in ("anthropic", "openai"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid provider: {provider}. Use 'anthropic' or 'openai'.",
+        )
+
+    # Validate the key before storing
+    try:
+        test_provider = create_provider(provider, api_key)
+        valid = test_provider.validate()
+        if not valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"API key validation failed for {provider}",
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"API key validation failed: {e}",
+        )
+
+    app_db.set_agent_api_key(provider, api_key)
+    return {"success": True, "message": f"API key configured for {provider}"}
+
+
+@app.delete(
+    "/api/agent/config/{provider}",
+    summary="Remove agent API key",
+    tags=["agent"],
+)
+async def delete_agent_config(provider: str):
+    """
+    Remove a stored API key.
+
+    Args:
+        provider: AI provider name (anthropic, openai)
+    """
+    from services.app_database import app_db
+
+    if provider not in ("anthropic", "openai"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid provider: {provider}",
+        )
+
+    app_db.delete_agent_api_key(provider)
+    return {"success": True, "message": f"API key removed for {provider}"}
+
+
+@app.get(
+    "/api/agent/collections",
+    summary="List collections available to agents",
+    tags=["agent"],
+)
+async def list_agent_collections():
+    """
+    List all collections available for agent queries.
+
+    Returns collection IDs, names, and document counts.
+    Useful for agents to discover what collections are available.
+    """
+    collections = collection_service.get_all_collections()
+    result = []
+
+    for c in collections:
+        collection_id = c["id"]
+        # Get actual document/chunk counts from the indexer
+        stats = indexer_manager.get_collection_stats(collection_id)
+
+        result.append({
+            "id": collection_id,
+            "name": c["name"],
+            "description": c.get("description", ""),
+            "document_count": stats.get("total_documents", 0),
+            "chunk_count": stats.get("total_chunks", 0),
+        })
+
+    return {"collections": result}
 
 
 @app.get(
@@ -1247,6 +1611,325 @@ async def delete_document(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete document: {str(e)}",
         )
+
+
+# Backup/Restore endpoints (v3.0 feature)
+backup_service = BackupService()
+
+
+@app.get(
+    "/api/backups",
+    summary="List all backups",
+    tags=["backup"],
+)
+async def list_backups():
+    """
+    List all available backup files.
+
+    Returns list of backups with metadata including:
+    - filename, size, creation time
+    - collection_id, description
+    - whether documents are included
+    - storage type and embedding model used
+    """
+    backups = backup_service.list_backups()
+    return {"backups": backups}
+
+
+@app.post(
+    "/api/backups",
+    summary="Create a backup",
+    tags=["backup"],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_backup(
+    collection_id: str = "default",
+    description: str = "",
+    include_documents: bool = True,
+):
+    """
+    Create a backup of a collection's index and documents.
+
+    Args:
+        collection_id: Collection to backup (default: "default")
+        description: Optional description for the backup
+        include_documents: Whether to include source document files (default: True)
+
+    Returns:
+        Backup file information including path and size
+    """
+    try:
+        backup_path = backup_service.create_backup(
+            collection_id=collection_id,
+            description=description,
+            include_documents=include_documents,
+        )
+
+        return {
+            "success": True,
+            "filename": backup_path.name,
+            "path": str(backup_path),
+            "size_mb": backup_path.stat().st_size / 1024 / 1024,
+            "collection_id": collection_id,
+            "includes_documents": include_documents,
+        }
+    except Exception as e:
+        logger.error(f"Backup creation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Backup creation failed: {str(e)}",
+        )
+
+
+@app.get(
+    "/api/backups/{backup_filename}",
+    summary="Get backup details",
+    tags=["backup"],
+)
+async def get_backup_info(backup_filename: str):
+    """
+    Get detailed information about a specific backup.
+
+    Args:
+        backup_filename: Name of the backup file
+
+    Returns full backup metadata and file listing.
+    """
+    info = backup_service.get_backup_info(backup_filename)
+    if not info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Backup '{backup_filename}' not found",
+        )
+    return info
+
+
+@app.post(
+    "/api/backups/{backup_filename}/restore",
+    summary="Restore from backup",
+    tags=["backup"],
+)
+async def restore_backup(
+    backup_filename: str,
+    target_collection_id: str = None,
+    overwrite: bool = False,
+):
+    """
+    Restore a collection from a backup file.
+
+    Args:
+        backup_filename: Name of the backup file to restore
+        target_collection_id: Collection ID to restore to (default: use original)
+        overwrite: Whether to overwrite existing data (default: False)
+
+    Returns restore results including files restored.
+    """
+    import gc
+
+    backup_path = backup_service.backup_dir / backup_filename
+
+    # Determine collection ID from backup metadata first
+    backup_info = backup_service.get_backup_info(backup_filename)
+    if not backup_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Backup file '{backup_filename}' not found",
+        )
+
+    collection_id = target_collection_id or backup_info.get("collection_id", "default")
+
+    # Close the indexer to release database file handles before restore
+    # This is critical on Windows where files can't be deleted while open
+    if overwrite:
+        logger.info(f"Closing indexer for '{collection_id}' before restore...")
+        indexer_manager.close_indexer(collection_id)
+        # Force garbage collection to release file handles
+        gc.collect()
+
+    try:
+        result = backup_service.restore_backup(
+            backup_path=backup_path,
+            target_collection_id=target_collection_id,
+            overwrite=overwrite,
+        )
+
+        # Load/reload the indexer for the restored collection
+        collection_id = result["collection_id"]
+        try:
+            # First invalidate any existing cached indexer
+            indexer_manager.remove_indexer(collection_id)
+            # Then load the indexer fresh from the restored data
+            indexer = indexer_manager.get_indexer(collection_id)
+            logger.info(f"Loaded indexer for restored collection '{collection_id}' with {indexer.vector_store.get_total_chunks()} chunks")
+        except Exception as e:
+            logger.warning(f"Could not load indexer after restore: {e}")
+
+        return result
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Backup file '{backup_filename}' not found",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Restore failed: {str(e)}",
+        )
+
+
+@app.delete(
+    "/api/backups/{backup_filename}",
+    summary="Delete a backup",
+    tags=["backup"],
+)
+async def delete_backup(backup_filename: str):
+    """
+    Delete a backup file.
+
+    Args:
+        backup_filename: Name of the backup file to delete
+    """
+    if not backup_service.delete_backup(backup_filename):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Backup '{backup_filename}' not found",
+        )
+
+    return {"success": True, "message": f"Backup '{backup_filename}' deleted"}
+
+
+@app.get(
+    "/api/index/diagnose",
+    summary="Diagnose index sync status",
+    tags=["admin"],
+)
+async def diagnose_index(collection_id: str = "default"):
+    """
+    Diagnose synchronization between FAISS index and metadata.
+
+    Args:
+        collection_id: Collection to diagnose (default: "default")
+
+    Returns:
+        Diagnostic information including:
+        - faiss_count: Number of vectors in FAISS
+        - metadata_count: Number of chunks in metadata
+        - embeddings_count: Number of stored embeddings
+        - status: synced, out_of_sync, missing_index, etc.
+        - issues: List of detected problems
+        - recommendations: Suggested fixes
+    """
+    try:
+        indexes_path = indexer_manager.get_indexes_path(collection_id)
+        repair_service = IndexRepairService(indexes_path)
+        return repair_service.diagnose()
+    except Exception as e:
+        logger.error(f"Index diagnosis failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Diagnosis failed: {str(e)}",
+        )
+
+
+@app.post(
+    "/api/index/repair",
+    summary="Repair index synchronization",
+    tags=["admin"],
+)
+async def repair_index(
+    collection_id: str = "default",
+    method: str = "rebuild",
+):
+    """
+    Repair FAISS-metadata synchronization issues.
+
+    Args:
+        collection_id: Collection to repair (default: "default")
+        method: Repair method:
+            - "rebuild": Re-embed all text from metadata (safest, slowest)
+            - "truncate": Remove orphaned FAISS entries
+            - "repair_documents": Reconstruct missing document records from chunks
+
+    The "rebuild" method is safer but slower - it re-embeds all text from metadata.
+    The "truncate" method is faster but only works if FAISS has more entries than metadata.
+    The "repair_documents" method fixes cases where chunks exist but document records are missing.
+
+    Returns:
+        Repair results including success status and details.
+    """
+    try:
+        indexes_path = indexer_manager.get_indexes_path(collection_id)
+
+        if method == "rebuild":
+            # Need embedding service for rebuilding
+            indexer = get_indexer(collection_id)
+            repair_service = IndexRepairService(
+                indexes_path,
+                embedding_service=indexer.embedding_service
+            )
+            result = repair_service.rebuild_from_metadata(
+                embedding_dim=indexer.embedding_service.embedding_dim
+            )
+        elif method == "truncate":
+            repair_service = IndexRepairService(indexes_path)
+            result = repair_service.truncate_faiss_to_metadata()
+        elif method == "repair_documents":
+            repair_service = IndexRepairService(indexes_path)
+            result = repair_service.repair_documents_table()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown repair method: {method}. Use 'rebuild', 'truncate', or 'repair_documents'.",
+            )
+
+        if result.get("success"):
+            # Reload the indexer to pick up the repaired index
+            indexer_manager.reload_indexer(collection_id)
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Index repair failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Repair failed: {str(e)}",
+        )
+
+
+@app.get(
+    "/api/backups/{backup_filename}/download",
+    summary="Download a backup file",
+    tags=["backup"],
+    response_class=FileResponse,
+)
+async def download_backup(backup_filename: str):
+    """
+    Download a backup file.
+
+    Args:
+        backup_filename: Name of the backup file to download
+    """
+    backup_path = backup_service.backup_dir / backup_filename
+
+    if not backup_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Backup '{backup_filename}' not found",
+        )
+
+    return FileResponse(
+        path=backup_path,
+        media_type="application/zip",
+        filename=backup_filename,
+    )
 
 
 # Mount static files at root to serve /assets/* and other static content

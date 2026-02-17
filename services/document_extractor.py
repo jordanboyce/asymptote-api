@@ -1,8 +1,9 @@
 """Generic document text extraction service supporting multiple file formats."""
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional, Any
 import logging
+import io
 
 # PDF extraction
 import pdfplumber
@@ -10,13 +11,127 @@ from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
+# OCR availability flags (set during initialization)
+PYTESSERACT_AVAILABLE = False
+EASYOCR_AVAILABLE = False
+PDF2IMAGE_AVAILABLE = False
+
+try:
+    import pytesseract
+    from PIL import Image
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    pass
+
+
+class ExtractionResult:
+    """Result of text extraction with metadata about the extraction method used."""
+
+    def __init__(self, page_texts: Dict[int, str], method: str = "text",
+                 ocr_pages: List[int] = None):
+        """
+        Initialize extraction result.
+
+        Args:
+            page_texts: Dictionary mapping page numbers to extracted text
+            method: Extraction method used ("text", "ocr", or "hybrid")
+            ocr_pages: List of page numbers where OCR was used (for hybrid)
+        """
+        self.page_texts = page_texts
+        self.method = method
+        self.ocr_pages = ocr_pages or []
+
+    def __getitem__(self, key):
+        return self.page_texts[key]
+
+    def __iter__(self):
+        return iter(self.page_texts)
+
+    def items(self):
+        return self.page_texts.items()
+
+    def keys(self):
+        return self.page_texts.keys()
+
+    def values(self):
+        return self.page_texts.values()
+
+    def __len__(self):
+        return len(self.page_texts)
+
 
 class DocumentExtractor:
     """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON)."""
 
     SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'}
 
-    def extract_text(self, file_path: Path) -> Dict[int, str]:
+    def __init__(self, enable_ocr: bool = False, ocr_engine: str = "pytesseract",
+                 ocr_language: str = "eng", ocr_fallback_only: bool = True):
+        """
+        Initialize the document extractor.
+
+        Args:
+            enable_ocr: Whether to enable OCR for scanned PDFs
+            ocr_engine: OCR engine to use ("pytesseract" or "easyocr")
+            ocr_language: Language code for OCR (e.g., "eng", "eng+fra")
+            ocr_fallback_only: Only use OCR when text extraction fails/empty
+        """
+        self.enable_ocr = enable_ocr
+        self.ocr_engine = ocr_engine
+        self.ocr_language = ocr_language
+        self.ocr_fallback_only = ocr_fallback_only
+        self._easyocr_reader = None
+
+        if enable_ocr:
+            self._validate_ocr_setup()
+
+    def _validate_ocr_setup(self):
+        """Validate OCR dependencies are available."""
+        if not PDF2IMAGE_AVAILABLE:
+            logger.warning(
+                "OCR enabled but pdf2image not installed. "
+                "Install with: pip install pdf2image"
+            )
+            return
+
+        if self.ocr_engine == "pytesseract" and not PYTESSERACT_AVAILABLE:
+            logger.warning(
+                "pytesseract OCR engine selected but not installed. "
+                "Install with: pip install pytesseract pillow"
+            )
+        elif self.ocr_engine == "easyocr" and not EASYOCR_AVAILABLE:
+            logger.warning(
+                "easyocr OCR engine selected but not installed. "
+                "Install with: pip install easyocr"
+            )
+
+    def _get_easyocr_reader(self):
+        """Lazily initialize EasyOCR reader."""
+        if self._easyocr_reader is None and EASYOCR_AVAILABLE:
+            import easyocr
+            # Parse language codes (e.g., "eng+fra" -> ["en", "fr"])
+            lang_map = {"eng": "en", "fra": "fr", "deu": "de", "spa": "es",
+                        "ita": "it", "por": "pt", "nld": "nl", "pol": "pl",
+                        "rus": "ru", "jpn": "ja", "kor": "ko", "chi_sim": "ch_sim"}
+            langs = []
+            for lang in self.ocr_language.split("+"):
+                langs.append(lang_map.get(lang, lang))
+            self._easyocr_reader = easyocr.Reader(langs, gpu=False)
+        return self._easyocr_reader
+
+    def extract_text(self, file_path: Path) -> ExtractionResult:
         """
         Extract text from a document file, returning a mapping of page/section numbers to text.
 
@@ -24,7 +139,7 @@ class DocumentExtractor:
             file_path: Path to the document file
 
         Returns:
-            Dictionary mapping page/section numbers (1-indexed) to extracted text
+            ExtractionResult with page texts and extraction method info
 
         Raises:
             ValueError: If file type is not supported
@@ -43,36 +158,76 @@ class DocumentExtractor:
         if file_ext == '.pdf':
             return self._extract_pdf(file_path)
         elif file_ext == '.txt':
-            return self._extract_txt(file_path)
+            return ExtractionResult(self._extract_txt(file_path), method="text")
         elif file_ext == '.docx':
-            return self._extract_docx(file_path)
+            return ExtractionResult(self._extract_docx(file_path), method="text")
         elif file_ext == '.csv':
-            return self._extract_csv(file_path)
+            return ExtractionResult(self._extract_csv(file_path), method="text")
         elif file_ext == '.md':
-            return self._extract_markdown(file_path)
+            return ExtractionResult(self._extract_markdown(file_path), method="text")
         elif file_ext == '.json':
-            return self._extract_json(file_path)
+            return ExtractionResult(self._extract_json(file_path), method="text")
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
 
-    def _extract_pdf(self, pdf_path: Path) -> Dict[int, str]:
+    def _extract_pdf(self, pdf_path: Path) -> ExtractionResult:
         """
-        Extract text from PDF file using pdfplumber with pypdf fallback.
+        Extract text from PDF file using pdfplumber with pypdf and OCR fallback.
 
         Returns:
-            Dictionary mapping page numbers (1-indexed) to text
+            ExtractionResult with page texts and extraction method info
         """
+        page_texts = {}
+        ocr_pages = []
+        method = "text"
+
         try:
             # Try pdfplumber first (better for complex layouts)
-            return self._extract_pdf_with_pdfplumber(pdf_path)
+            page_texts = self._extract_pdf_with_pdfplumber(pdf_path)
         except Exception as e:
             logger.warning(f"pdfplumber failed for {pdf_path.name}: {e}. Trying pypdf...")
             try:
                 # Fallback to pypdf
-                return self._extract_pdf_with_pypdf(pdf_path)
+                page_texts = self._extract_pdf_with_pypdf(pdf_path)
             except Exception as e2:
-                logger.error(f"Both PDF extraction methods failed for {pdf_path.name}: {e2}")
-                raise Exception(f"Failed to extract text from PDF {pdf_path.name}: {e2}")
+                logger.warning(f"pypdf failed for {pdf_path.name}: {e2}")
+                page_texts = {}
+
+        # Check if we need OCR (no text extracted or mostly empty pages)
+        if self.enable_ocr:
+            empty_pages = [p for p, text in page_texts.items()
+                          if not text or len(text.strip()) < 50]
+
+            should_ocr = False
+            if not page_texts:
+                # No text extracted at all
+                should_ocr = True
+            elif self.ocr_fallback_only and empty_pages:
+                # OCR only for empty/near-empty pages
+                should_ocr = True
+            elif not self.ocr_fallback_only:
+                # OCR all pages (user preference)
+                should_ocr = True
+
+            if should_ocr:
+                try:
+                    ocr_result = self._extract_pdf_with_ocr(pdf_path, empty_pages if self.ocr_fallback_only else None)
+                    if ocr_result:
+                        ocr_texts, ocr_pages = ocr_result
+                        # Merge OCR results with existing text
+                        for page_num, ocr_text in ocr_texts.items():
+                            if page_num not in page_texts or len(page_texts.get(page_num, "").strip()) < 50:
+                                page_texts[page_num] = ocr_text
+
+                        if ocr_pages:
+                            method = "hybrid" if any(p not in ocr_pages for p in page_texts.keys()) else "ocr"
+                except Exception as e:
+                    logger.warning(f"OCR failed for {pdf_path.name}: {e}")
+
+        if not page_texts:
+            raise Exception(f"Failed to extract text from PDF {pdf_path.name}: all methods failed")
+
+        return ExtractionResult(page_texts, method=method, ocr_pages=ocr_pages)
 
     def _extract_pdf_with_pdfplumber(self, pdf_path: Path) -> Dict[int, str]:
         """Extract text using pdfplumber (handles complex layouts better)."""
@@ -95,6 +250,96 @@ class DocumentExtractor:
             page_texts[page_num] = text.strip()
 
         return page_texts
+
+    def _extract_pdf_with_ocr(self, pdf_path: Path,
+                               pages_to_ocr: Optional[List[int]] = None
+                               ) -> Optional[Tuple[Dict[int, str], List[int]]]:
+        """
+        Extract text from PDF using OCR.
+
+        Args:
+            pdf_path: Path to PDF file
+            pages_to_ocr: Specific page numbers to OCR (None = all pages)
+
+        Returns:
+            Tuple of (page_texts dict, list of OCR'd page numbers) or None if OCR fails
+        """
+        if not PDF2IMAGE_AVAILABLE:
+            logger.warning("pdf2image not available for OCR")
+            return None
+
+        if self.ocr_engine == "pytesseract" and not PYTESSERACT_AVAILABLE:
+            logger.warning("pytesseract not available for OCR")
+            return None
+
+        if self.ocr_engine == "easyocr" and not EASYOCR_AVAILABLE:
+            logger.warning("easyocr not available for OCR")
+            return None
+
+        logger.info(f"Running OCR on {pdf_path.name} using {self.ocr_engine}")
+
+        try:
+            from pdf2image import convert_from_path
+
+            # Convert PDF pages to images
+            images = convert_from_path(str(pdf_path), dpi=300)
+
+            page_texts = {}
+            ocr_pages = []
+
+            for page_num, image in enumerate(images, start=1):
+                # Skip pages we don't need to OCR
+                if pages_to_ocr is not None and page_num not in pages_to_ocr:
+                    continue
+
+                text = self._ocr_image(image)
+                if text:
+                    page_texts[page_num] = text
+                    ocr_pages.append(page_num)
+                    logger.debug(f"OCR extracted {len(text)} chars from page {page_num}")
+
+            return page_texts, ocr_pages
+
+        except Exception as e:
+            logger.error(f"OCR failed for {pdf_path.name}: {e}")
+            return None
+
+    def _ocr_image(self, image) -> str:
+        """
+        Run OCR on a single image.
+
+        Args:
+            image: PIL Image object
+
+        Returns:
+            Extracted text string
+        """
+        if self.ocr_engine == "pytesseract":
+            import pytesseract
+            text = pytesseract.image_to_string(image, lang=self.ocr_language)
+            return text.strip()
+
+        elif self.ocr_engine == "easyocr":
+            import numpy as np
+            reader = self._get_easyocr_reader()
+            # Convert PIL Image to numpy array
+            img_array = np.array(image)
+            results = reader.readtext(img_array)
+            # Combine all detected text
+            text = " ".join([result[1] for result in results])
+            return text.strip()
+
+        return ""
+
+    def is_ocr_available(self) -> bool:
+        """Check if OCR is available with current configuration."""
+        if not PDF2IMAGE_AVAILABLE:
+            return False
+        if self.ocr_engine == "pytesseract":
+            return PYTESSERACT_AVAILABLE
+        if self.ocr_engine == "easyocr":
+            return EASYOCR_AVAILABLE
+        return False
 
     def _extract_txt(self, txt_path: Path) -> Dict[int, str]:
         """
@@ -154,7 +399,7 @@ class DocumentExtractor:
 
     def _extract_csv(self, csv_path: Path) -> Dict[int, str]:
         """
-        Extract text from CSV file.
+        Extract text from CSV file (legacy format for backward compatibility).
 
         Returns:
             Dictionary with sections (every ~50 rows = 1 section) containing formatted text
@@ -207,6 +452,68 @@ class DocumentExtractor:
             page_texts[page_num] = "\n".join(lines)
 
         return page_texts
+
+    def extract_csv_rows(self, csv_path: Path) -> List[Dict[str, Any]]:
+        """
+        Extract CSV file as individual rows with column metadata (v3.0 row-level indexing).
+
+        Args:
+            csv_path: Path to CSV file
+
+        Returns:
+            List of dictionaries, each containing:
+                - row_number: Original row number (1-indexed, excluding header)
+                - columns: List of column names
+                - values: Dictionary of column name -> value
+                - text: Formatted text representation for embedding
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError(
+                "pandas is required for CSV support. "
+                "Install it with: pip install pandas"
+            )
+
+        # Read CSV
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception as e:
+            logger.error(f"Failed to read CSV {csv_path.name}: {e}")
+            raise Exception(f"Failed to read CSV file: {e}")
+
+        if df.empty:
+            logger.warning(f"Empty CSV file: {csv_path.name}")
+            return []
+
+        columns = [str(col) for col in df.columns]
+        rows = []
+
+        for idx, (_, row) in enumerate(df.iterrows(), start=1):
+            # Create a dictionary of column -> value
+            values = {}
+            text_parts = []
+
+            for col in columns:
+                val = row[col]
+                # Handle NaN values
+                if pd.isna(val):
+                    val = ""
+                else:
+                    val = str(val)
+                values[col] = val
+                # Include column name in text for better semantic understanding
+                text_parts.append(f"{col}: {val}")
+
+            rows.append({
+                "row_number": idx,
+                "columns": columns,
+                "values": values,
+                "text": " | ".join(text_parts)
+            })
+
+        logger.info(f"Extracted {len(rows)} rows from CSV {csv_path.name}")
+        return rows
 
     def _extract_markdown(self, md_path: Path) -> Dict[int, str]:
         """

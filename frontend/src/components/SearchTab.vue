@@ -40,16 +40,30 @@
           @keyup.enter="search"
         />
         <button
+          v-if="!loading"
           class="btn btn-primary join-item"
           @click="search"
-          :disabled="loading || !searchStore.query.trim()"
+          :disabled="!searchStore.query.trim()"
         >
-          <svg v-if="!loading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
-          <span v-if="loading" class="loading loading-spinner"></span>
-          {{ loading ? (aiActive ? 'AI Processing...' : 'Searching...') : 'Search' }}
+          Search
         </button>
+        <button
+          v-else
+          class="btn btn-error join-item"
+          @click="cancelSearch"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+          Cancel
+        </button>
+      </div>
+      <div v-if="loading" class="text-sm text-base-content/60 mt-2">
+        <span class="loading loading-spinner loading-xs mr-2"></span>
+        {{ aiActive ? (selectedProviders.includes('ollama') ? 'AI processing... (Ollama may take a while)' : 'AI processing...') : 'Searching...' }}
       </div>
     </div>
 
@@ -226,19 +240,70 @@
           <div class="flex justify-between items-start">
             <div class="flex-1">
               <h4 class="card-title text-lg">
-                <svg class="w-5 h-5 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <!-- Format-aware icon -->
+                <svg v-if="result.source_format === 'csv'" class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <svg v-else-if="result.source_format === 'pdf'" class="w-5 h-5 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                <svg v-else-if="result.source_format === 'md'" class="w-5 h-5 text-info" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"/>
+                </svg>
+                <svg v-else class="w-5 h-5 text-base-content/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
                 {{ result.filename }}
               </h4>
-              <div class="badge badge-primary badge-sm mt-1">Page {{ result.page_number }}</div>
-              <div class="badge badge-ghost badge-sm mt-1 ml-2">
-                Similarity: {{ (result.similarity_score * 100).toFixed(1) }}%
+              <div class="flex flex-wrap gap-1 mt-1">
+                <!-- Page/Row indicator -->
+                <div v-if="result.source_format === 'csv' && result.csv_row_number" class="badge badge-success badge-sm">
+                  Row {{ result.csv_row_number }}
+                </div>
+                <div v-else class="badge badge-primary badge-sm">
+                  Page {{ result.page_number }}
+                </div>
+                <!-- Similarity score -->
+                <div class="badge badge-ghost badge-sm">
+                  Similarity: {{ (result.similarity_score * 100).toFixed(1) }}%
+                </div>
+                <!-- Extraction method indicator (for OCR) -->
+                <div v-if="result.extraction_method === 'ocr'" class="badge badge-warning badge-sm">
+                  OCR
+                </div>
+                <div v-else-if="result.extraction_method === 'hybrid'" class="badge badge-info badge-sm">
+                  Hybrid
+                </div>
+                <!-- Format badge -->
+                <div v-if="result.source_format" class="badge badge-outline badge-sm">
+                  {{ result.source_format.toUpperCase() }}
+                </div>
               </div>
             </div>
           </div>
 
-          <p class="text-sm mt-2" v-html="highlightText(result.text_snippet, searchStore.query)"></p>
+          <!-- CSV Table View (v3.0 feature) -->
+          <div v-if="result.source_format === 'csv' && result.csv_columns && result.csv_values" class="mt-3 overflow-x-auto">
+            <table class="table table-xs table-zebra">
+              <thead>
+                <tr>
+                  <th v-for="col in result.csv_columns" :key="col" class="bg-base-300 text-xs font-semibold">
+                    {{ col }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td v-for="col in result.csv_columns" :key="col" class="text-sm">
+                    <span v-html="highlightText(String(result.csv_values[col] || ''), searchStore.query)"></span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Standard text snippet (for non-CSV or CSV without row data) -->
+          <p v-else class="text-sm mt-2" v-html="highlightText(result.text_snippet, searchStore.query)"></p>
 
           <div class="card-actions justify-end mt-4">
             <a
@@ -249,7 +314,7 @@
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
               </svg>
-              Open Page {{ result.page_number }}
+              {{ result.source_format === 'csv' ? 'Open Row' : 'Open Page' }} {{ result.source_format === 'csv' ? result.csv_row_number : result.page_number }}
             </a>
             <a
               :href="result.pdf_url"
@@ -382,6 +447,9 @@ const collectionStore = useCollectionStore()
 const loading = ref(false)
 const error = ref('')
 
+// AbortController for cancelling ongoing searches
+let abortController = null
+
 // Cache prompt state
 const showCachePrompt = ref(false)
 const cachedData = ref(null)
@@ -506,8 +574,10 @@ const activeFeaturesList = computed(() => {
 const cacheStats = computed(() => searchStore.getCacheStats())
 
 const historyEntries = computed(() => {
-  // Use the reactive cache directly
-  return Object.values(searchStore.cache)
+  // Get cache for current collection (cache is collection-aware: { collectionId: { "query|topK": entry } })
+  const collectionId = collectionStore.currentCollectionId || 'default'
+  const collectionCache = searchStore.cache[collectionId] || {}
+  return Object.values(collectionCache)
     .filter(entry => entry && entry.query && entry.timestamp) // Filter out corrupted entries
     .sort((a, b) => b.timestamp - a.timestamp)
 })
@@ -626,7 +696,21 @@ const search = async () => {
   await executeSearch()
 }
 
+const cancelSearch = () => {
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
+  loading.value = false
+  // Note: Backend/Ollama may continue processing, but we stop waiting for the response
+  error.value = 'Search cancelled (backend may still be processing)'
+}
+
 const executeSearch = async () => {
+  // Create new AbortController for this search
+  abortController = new AbortController()
+  const signal = abortController.signal
+
   loading.value = true
   error.value = ''
 
@@ -657,7 +741,7 @@ const executeSearch = async () => {
 
         try {
           const collectionId = collectionStore.currentCollectionId
-          const response = await axios.post(`/search?collection_id=${collectionId}`, body, { headers })
+          const response = await axios.post(`/search?collection_id=${collectionId}`, body, { headers, signal })
           return {
             provider,
             results: response.data.results,
@@ -665,6 +749,10 @@ const executeSearch = async () => {
             aiUsage: response.data.ai_usage
           }
         } catch (err) {
+          // Check if this was a cancellation
+          if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') {
+            throw err // Re-throw to be caught by outer catch
+          }
           console.error(`Search with ${provider} failed:`, err)
           return { provider, error: err.response?.data?.detail || `${provider} failed` }
         }
@@ -691,7 +779,7 @@ const executeSearch = async () => {
       // Regular search without AI
       const body = { query: searchStore.query, top_k: searchStore.topK }
       const collectionId = collectionStore.currentCollectionId
-      const response = await axios.post(`/search?collection_id=${collectionId}`, body)
+      const response = await axios.post(`/search?collection_id=${collectionId}`, body, { signal })
       searchStore.setSearchResults({
         query: searchStore.query,
         results: response.data.results
@@ -700,10 +788,16 @@ const executeSearch = async () => {
 
     emit('stats-updated')
   } catch (err) {
+    // Check if this was a cancellation - don't show as error
+    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED') {
+      error.value = 'Search cancelled'
+      return
+    }
     error.value = err.response?.data?.detail || err.message || 'Search failed. Please try again.'
     searchStore.clearResults()
   } finally {
     loading.value = false
+    abortController = null
   }
 }
 </script>

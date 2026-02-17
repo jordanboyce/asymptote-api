@@ -6,13 +6,14 @@ import hashlib
 import logging
 from datetime import datetime
 
+from config import settings
 from models.schemas import (
     DocumentMetadata,
     AIOptions,
     AIUsage,
     AIUsageDetail,
 )
-from services.document_extractor import DocumentExtractor
+from services.document_extractor import DocumentExtractor, ExtractionResult
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
@@ -46,7 +47,7 @@ class DocumentIndexer:
 
     def index_document(self, document_path: Path, filename: str) -> DocumentMetadata:
         """
-        Index a single document (PDF, TXT, DOCX, or CSV).
+        Index a single document (PDF, TXT, DOCX, CSV, MD, or JSON).
 
         Args:
             document_path: Path to the document file
@@ -60,21 +61,40 @@ class DocumentIndexer:
         # Generate document ID from file content hash
         document_id = self._generate_document_id(document_path)
 
+        # Determine source format from file extension
+        source_format = document_path.suffix.lower().lstrip(".")
+
+        # Handle CSV with row-level indexing (v3.0 feature)
+        if source_format == "csv" and settings.csv_row_level_indexing:
+            return self._index_csv_rows(document_path, filename, document_id)
+
         # Extract text from document
         logger.debug(f"Extracting text from {filename}")
-        page_texts = self.document_extractor.extract_text(document_path)
+        extraction_result = self.document_extractor.extract_text(document_path)
+
+        # Handle ExtractionResult object
+        if isinstance(extraction_result, ExtractionResult):
+            page_texts = extraction_result.page_texts
+            extraction_method = extraction_result.method
+        else:
+            # Backward compatibility: plain dict
+            page_texts = extraction_result
+            extraction_method = "text"
+
         num_pages = len(page_texts)
 
         if num_pages == 0:
             logger.warning(f"No pages extracted from {filename}")
             raise ValueError(f"Could not extract any pages from {filename}")
 
-        # Chunk the text
+        # Chunk the text with format metadata
         logger.debug(f"Chunking text from {filename}")
         chunks = self.text_chunker.chunk_document(
             page_texts=page_texts,
             document_id=document_id,
             filename=filename,
+            source_format=source_format,
+            extraction_method=extraction_method,
         )
 
         num_chunks = len(chunks)
@@ -91,16 +111,84 @@ class DocumentIndexer:
         logger.debug(f"Adding {num_chunks} chunks to vector store")
         self.vector_store.add_chunks(chunks, embeddings)
 
-        # Create metadata
+        # Create metadata with v3.0 fields
         metadata = DocumentMetadata(
             document_id=document_id,
             filename=filename,
             total_pages=num_pages,
             total_chunks=num_chunks,
             indexed_at=datetime.utcnow().isoformat(),
+            source_format=source_format,
+            extraction_method=extraction_method,
+            embedding_model=settings.embedding_model,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
         )
 
-        logger.info(f"Successfully indexed {filename}: {num_pages} pages, {num_chunks} chunks")
+        logger.info(
+            f"Successfully indexed {filename}: {num_pages} pages, {num_chunks} chunks "
+            f"(format={source_format}, method={extraction_method})"
+        )
+        return metadata
+
+    def _index_csv_rows(self, document_path: Path, filename: str,
+                        document_id: str) -> DocumentMetadata:
+        """
+        Index a CSV file with row-level chunking (v3.0 feature).
+
+        Args:
+            document_path: Path to CSV file
+            filename: Original filename
+            document_id: Generated document ID
+
+        Returns:
+            DocumentMetadata object
+        """
+        logger.info(f"Indexing CSV with row-level chunking: {filename}")
+
+        # Extract CSV rows with column metadata
+        csv_rows = self.document_extractor.extract_csv_rows(document_path)
+
+        if not csv_rows:
+            logger.warning(f"No rows extracted from {filename}")
+            raise ValueError(f"Could not extract any rows from {filename}")
+
+        num_rows = len(csv_rows)
+
+        # Create chunks from CSV rows
+        chunks = self.text_chunker.chunk_csv_rows(
+            csv_rows=csv_rows,
+            document_id=document_id,
+            filename=filename,
+            rows_per_chunk=settings.csv_rows_per_chunk if not settings.csv_row_level_indexing else 1,
+        )
+
+        num_chunks = len(chunks)
+
+        # Generate embeddings
+        logger.debug(f"Generating embeddings for {num_chunks} CSV row chunks")
+        chunk_texts = [chunk.text for chunk in chunks]
+        embeddings = self.embedding_service.embed_texts(chunk_texts)
+
+        # Add to vector store
+        logger.debug(f"Adding {num_chunks} CSV chunks to vector store")
+        self.vector_store.add_chunks(chunks, embeddings)
+
+        # Create metadata
+        metadata = DocumentMetadata(
+            document_id=document_id,
+            filename=filename,
+            total_pages=num_rows,  # For CSV, "pages" = rows
+            total_chunks=num_chunks,
+            indexed_at=datetime.utcnow().isoformat(),
+            source_format="csv",
+            extraction_method="text",
+            embedding_model=settings.embedding_model,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        )
+
+        logger.info(f"Successfully indexed CSV {filename}: {num_rows} rows, {num_chunks} chunks")
         return metadata
 
     def search(

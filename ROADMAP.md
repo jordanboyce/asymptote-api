@@ -336,43 +336,42 @@ class OllamaProvider(AIProvider):
 
 ---
 
-## Future Considerations (v3.0+)
+## Implemented in v3.0
 
-### 0. Data Persistence Across Versions (Priority)
+### 0. Data Persistence Across Versions ✅
 - **Persistent indexes across updates**
-  - Collections and vector indexes should survive application updates without requiring re-indexing
-  - Store version metadata (schema version, embedding model version, FAISS index format) alongside data
-  - Detect version mismatches on startup and handle gracefully
-- **Automatic migration tooling**
-  - Migration scripts that run on startup when data format changes
-  - Support for incremental migrations (v1 → v2 → v3)
-  - Dry-run mode to preview migrations before applying
+  - ✅ Schema version tracking in SQLite metadata store
+  - ✅ Automatic migrations on startup (v1/v2 → v3)
+  - ✅ Store version metadata (schema version, embedding model, chunk settings) per document
 - **Backup and restore**
-  - Export collections with their indexes as portable archives
-  - Import collections from backup files
-  - CLI tool for backup/restore operations
-- **Version compatibility matrix**
-  - Document which data formats are compatible with which application versions
-  - Warn users before breaking upgrades
-  - Option to keep old data directory when upgrading
+  - ✅ Export collections with indexes as portable ZIP archives
+  - ✅ Import/restore collections from backup files
+  - ✅ API endpoints for backup management (`/api/backups`)
+  - ✅ Include or exclude source documents in backups
 
-### 1. Format-Aware Indexing & Search (Priority)
+### 1. Format-Aware Indexing & Search ✅
 - **Row-level indexing for CSV/tabular data**
-  - Each row indexed as its own chunk with headers embedded
-  - Metadata stores column names, row number, and raw values
-  - Search results render as tables instead of text snippets
-  - Unified search across mixed content (PDFs + CSVs in same results)
+  - ✅ Each CSV row indexed as its own chunk with column headers
+  - ✅ Metadata stores column names, row number, and raw values
+  - ✅ Search results render as tables for CSV results
+  - ✅ Unified search across mixed content (PDFs + CSVs in same results)
 - **Chunk metadata schema extension**
-  - Add `format` field (pdf, txt, docx, csv)
-  - Add `columns` and `values` arrays for tabular data
-  - Frontend detects format and renders appropriately
+  - ✅ Added `source_format` field (pdf, txt, docx, csv, md, json)
+  - ✅ Added `extraction_method` field (text, ocr, hybrid)
+  - ✅ Added `csv_columns`, `csv_values`, `csv_row_number` for tabular data
+  - ✅ Frontend format-aware icons and rendering
 
-### 2. OCR for Image-Based PDFs (Priority)
+### 2. OCR for Image-Based PDFs ✅
 - **Scanned document support**
-  - Detect when PDF pages contain no extractable text
-  - Fall back to OCR using pytesseract + pdf2image
-  - Support for large collections of scanned document PDFs
-  - Optional GPU acceleration with EasyOCR as alternative
+  - ✅ Detect when PDF pages contain no extractable text
+  - ✅ Fall back to OCR using pytesseract + pdf2image
+  - ✅ Support for hybrid extraction (text + OCR for mixed documents)
+  - ✅ Optional EasyOCR as alternative engine
+  - ✅ Configurable via environment variables
+
+---
+
+## Future Considerations (v4.0+)
 
 ### 3. Additional Multi-modal Search
 - Support image search (extract text from images with OCR)
@@ -419,11 +418,16 @@ class OllamaProvider(AIProvider):
 2. Metadata storage toggle in UI
 3. Search configuration options
 
-**Phase 3 (v3.0 - Format & OCR):**
-1. Format-aware indexing for CSV/tabular data (row-level chunks, table rendering)
-2. OCR for image-based/scanned PDFs (pytesseract + pdf2image)
-3. Batch operations
-4. Performance monitoring
+**Phase 3 (v3.0 - Format & OCR): ✅ COMPLETED**
+1. ✅ Format-aware indexing for CSV/tabular data (row-level chunks, table rendering)
+2. ✅ OCR for image-based/scanned PDFs (pytesseract + pdf2image)
+3. ✅ Backup and restore functionality
+4. ✅ Data versioning and migrations
+
+**Phase 4 (v4.0):**
+1. Batch operations (bulk upload, multi-select delete)
+2. Performance monitoring dashboard
+3. Advanced chunking strategies
 
 ---
 
@@ -452,4 +456,4 @@ If you have feature requests or suggestions, please open an issue on GitHub or c
 
 ---
 
-**Last Updated:** 2024-02-12
+**Last Updated:** 2025-02-17

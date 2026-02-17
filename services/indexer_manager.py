@@ -29,7 +29,18 @@ class IndexerManager:
         """Initialize the indexer manager."""
         self._indexers: Dict[str, DocumentIndexer] = {}
         self._embedding_services: Dict[str, EmbeddingService] = {}
-        self._document_extractor = DocumentExtractor()
+
+        # v3.0: Initialize document extractor with OCR settings
+        self._document_extractor = DocumentExtractor(
+            enable_ocr=settings.enable_ocr,
+            ocr_engine=settings.ocr_engine,
+            ocr_language=settings.ocr_language,
+            ocr_fallback_only=settings.ocr_fallback_only,
+        )
+
+        if settings.enable_ocr:
+            ocr_available = self._document_extractor.is_ocr_available()
+            logger.info(f"OCR enabled: {ocr_available} (engine: {settings.ocr_engine})")
 
     def get_indexer(self, collection_id: str = "default") -> DocumentIndexer:
         """Get or create an indexer for a collection.
@@ -137,6 +148,23 @@ class IndexerManager:
         if collection_id in self._indexers:
             del self._indexers[collection_id]
             logger.info(f"Removed indexer for deleted collection '{collection_id}'")
+
+    def close_indexer(self, collection_id: str):
+        """Close an indexer and release all resources (e.g., before restore).
+
+        This properly closes database connections and clears references
+        to allow file deletion on Windows.
+
+        Args:
+            collection_id: Collection ID
+        """
+        if collection_id in self._indexers:
+            indexer = self._indexers[collection_id]
+            # Close the vector store to release file handles
+            if hasattr(indexer.vector_store, 'close'):
+                indexer.vector_store.close()
+            del self._indexers[collection_id]
+            logger.info(f"Closed indexer for collection '{collection_id}'")
 
     def save_all(self):
         """Save all indexers to disk."""

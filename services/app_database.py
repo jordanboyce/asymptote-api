@@ -873,6 +873,69 @@ class AppDatabase:
             )
             return [row[0] for row in cursor.fetchall()]
 
+    # Agent API Key Storage
+    def set_agent_api_key(self, provider: str, api_key: str):
+        """Store an API key for agent use.
+
+        Note: Keys are stored in plaintext. For production, consider encryption.
+
+        Args:
+            provider: Provider name (anthropic, openai)
+            api_key: The API key to store
+        """
+        key = f"agent_api_key_{provider}"
+        self.set_user_preference(key, api_key)
+        logger.info(f"Stored agent API key for {provider}")
+
+    def get_agent_api_key(self, provider: str) -> Optional[str]:
+        """Get stored API key for a provider.
+
+        Args:
+            provider: Provider name (anthropic, openai)
+
+        Returns:
+            API key or None if not stored
+        """
+        key = f"agent_api_key_{provider}"
+        return self.get_user_preference(key)
+
+    def delete_agent_api_key(self, provider: str):
+        """Delete stored API key for a provider.
+
+        Args:
+            provider: Provider name
+        """
+        key = f"agent_api_key_{provider}"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM user_preferences WHERE key = ?", (key,))
+            conn.commit()
+        logger.info(f"Deleted agent API key for {provider}")
+
+    def get_agent_config(self) -> Dict[str, Any]:
+        """Get agent API configuration.
+
+        Returns:
+            Dict with provider info (keys are masked)
+        """
+        config = {
+            "providers": {}
+        }
+        for provider in ["anthropic", "openai"]:
+            key = self.get_agent_api_key(provider)
+            if key:
+                # Mask the key for security
+                masked = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+                config["providers"][provider] = {
+                    "configured": True,
+                    "key_preview": masked
+                }
+            else:
+                config["providers"][provider] = {
+                    "configured": False,
+                    "key_preview": None
+                }
+        return config
+
 
 # Global instance
 app_db = AppDatabase()

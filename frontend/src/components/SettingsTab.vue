@@ -67,6 +67,14 @@
           Re-index
         </a>
         <a
+          href="#index-repair"
+          class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
+          :class="activeSection === 'index-repair' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-base-200 text-base-content/70'"
+          @click.prevent="scrollToSection('index-repair')"
+        >
+          Index Repair
+        </a>
+        <a
           href="#embedding-model"
           class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
           :class="activeSection === 'embedding-model' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-base-200 text-base-content/70'"
@@ -77,6 +85,14 @@
 
         <!-- Other Section -->
         <div class="text-xs font-semibold text-base-content/50 mt-4 mb-1 uppercase">Other</div>
+        <a
+          href="#backups"
+          class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
+          :class="activeSection === 'backups' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-base-200 text-base-content/70'"
+          @click.prevent="scrollToSection('backups')"
+        >
+          Backups
+        </a>
         <a
           href="#api-docs"
           class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
@@ -771,6 +787,149 @@
         </div>
       </div>
 
+      <!-- Index Repair -->
+      <div id="index-repair" class="card bg-base-200 scroll-mt-36">
+        <div class="card-body">
+          <div class="flex items-center gap-2">
+            <h3 class="card-title">Index Repair</h3>
+            <span class="badge badge-sm badge-warning">Maintenance</span>
+          </div>
+          <p class="text-sm text-base-content/70 mb-4">
+            Diagnose and repair synchronization issues between the FAISS vector index and metadata database.
+            Use this if searches return "No metadata found" errors.
+          </p>
+
+          <!-- Diagnose Button -->
+          <div class="space-y-4">
+            <button
+              class="btn btn-outline"
+              :disabled="diagnosingIndex"
+              @click="diagnoseIndex"
+            >
+              <span v-if="diagnosingIndex" class="loading loading-spinner loading-sm"></span>
+              <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              {{ diagnosingIndex ? 'Diagnosing...' : 'Diagnose Index' }}
+            </button>
+
+            <!-- Diagnosis Results -->
+            <div v-if="indexDiagnosis" class="space-y-3">
+              <!-- Status Badge -->
+              <div class="flex items-center gap-2">
+                <span class="font-semibold">Status:</span>
+                <span
+                  class="badge"
+                  :class="{
+                    'badge-success': indexDiagnosis.status === 'synced',
+                    'badge-warning': indexDiagnosis.status === 'out_of_sync',
+                    'badge-error': ['missing_index', 'missing_metadata', 'corrupted_index', 'corrupted_metadata'].includes(indexDiagnosis.status)
+                  }"
+                >
+                  {{ indexDiagnosis.status.replace(/_/g, ' ') }}
+                </span>
+              </div>
+
+              <!-- Counts -->
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4 bg-base-300 rounded-lg p-4">
+                <div class="text-center">
+                  <div class="text-xs text-base-content/60">FAISS Vectors</div>
+                  <div class="text-lg font-bold">{{ indexDiagnosis.faiss_count?.toLocaleString() || 0 }}</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-xs text-base-content/60">Metadata Chunks</div>
+                  <div class="text-lg font-bold">{{ indexDiagnosis.metadata_count?.toLocaleString() || 0 }}</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-xs text-base-content/60">Embeddings</div>
+                  <div class="text-lg font-bold">{{ indexDiagnosis.embeddings_count?.toLocaleString() || 0 }}</div>
+                </div>
+                <div class="text-center">
+                  <div class="text-xs text-base-content/60">Documents</div>
+                  <div class="text-lg font-bold" :class="{'text-warning': indexDiagnosis.documents_count === 0 && indexDiagnosis.metadata_count > 0}">
+                    {{ indexDiagnosis.documents_count?.toLocaleString() || 0 }}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Issues -->
+              <div v-if="indexDiagnosis.issues?.length > 0" class="alert alert-warning">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <div>
+                  <div class="font-bold">Issues Found:</div>
+                  <ul class="text-sm mt-1 list-disc list-inside">
+                    <li v-for="issue in indexDiagnosis.issues" :key="issue">{{ issue }}</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Success if synced -->
+              <div v-else-if="indexDiagnosis.status === 'synced'" class="alert alert-success">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Index is synchronized - no repair needed!</span>
+              </div>
+
+              <!-- Repair Options -->
+              <div v-if="indexDiagnosis.status === 'out_of_sync'" class="space-y-3">
+                <div class="divider text-sm text-base-content/50">Repair Options</div>
+
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    class="btn btn-primary"
+                    :disabled="repairingIndex"
+                    @click="repairIndex('rebuild')"
+                  >
+                    <span v-if="repairingIndex === 'rebuild'" class="loading loading-spinner loading-sm"></span>
+                    <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Rebuild from Metadata
+                  </button>
+
+                  <button
+                    v-if="indexDiagnosis.faiss_count > indexDiagnosis.metadata_count"
+                    class="btn btn-outline"
+                    :disabled="repairingIndex"
+                    @click="repairIndex('truncate')"
+                  >
+                    <span v-if="repairingIndex === 'truncate'" class="loading loading-spinner loading-sm"></span>
+                    Truncate FAISS (Fast)
+                  </button>
+
+                  <button
+                    v-if="indexDiagnosis.orphaned_chunks_count > 0 || (indexDiagnosis.documents_count === 0 && indexDiagnosis.metadata_count > 0)"
+                    class="btn btn-warning"
+                    :disabled="repairingIndex"
+                    @click="repairIndex('repair_documents')"
+                  >
+                    <span v-if="repairingIndex === 'repair_documents'" class="loading loading-spinner loading-sm"></span>
+                    <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Repair Documents Table
+                  </button>
+                </div>
+
+                <div class="text-xs text-base-content/60">
+                  <strong>Rebuild:</strong> Re-embeds all text from metadata. Safer but slower.<br>
+                  <strong>Truncate:</strong> Removes orphaned FAISS entries. Faster but only works when FAISS has more entries than metadata.<br>
+                  <strong>Repair Documents:</strong> Reconstructs missing document records from chunks. Fixes backups with empty documents table.
+                </div>
+              </div>
+            </div>
+
+            <!-- Repair Result -->
+            <div v-if="repairMessage" class="alert" :class="repairMessageType === 'success' ? 'alert-success' : 'alert-error'">
+              <div>{{ repairMessage }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Embedding Model Selection (Per-Collection) -->
       <div id="embedding-model" class="card bg-base-200 scroll-mt-36">
         <div class="card-body">
@@ -869,6 +1028,204 @@
       </div>
 
       <!-- ============ OTHER SETTINGS ============ -->
+
+      <!-- Backups (v3.0 feature) -->
+      <div id="backups" class="card bg-base-200 scroll-mt-36">
+        <div class="card-body">
+          <div class="flex items-center gap-2">
+            <h3 class="card-title">Backup & Restore</h3>
+            <span class="badge badge-sm badge-info">v3.0</span>
+          </div>
+          <p class="text-sm text-base-content/70 mb-4">
+            Create backups of your collection indexes and documents. Restore from backups to recover data or migrate between systems.
+          </p>
+
+          <!-- Create Backup Section -->
+          <div class="space-y-4">
+            <div class="divider text-sm text-base-content/50">Create Backup</div>
+
+            <div class="form-control">
+              <label class="label">
+                <span class="label-text">Description (optional)</span>
+              </label>
+              <input
+                v-model="backupDescription"
+                type="text"
+                placeholder="e.g., Before major update..."
+                class="input input-bordered w-full"
+              />
+            </div>
+
+            <div class="form-control">
+              <label class="label cursor-pointer justify-start gap-4">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-primary"
+                  v-model="backupIncludeDocuments"
+                />
+                <div>
+                  <span class="label-text font-medium">Include source documents</span>
+                  <p class="text-xs text-base-content/60">Include uploaded files (PDF, DOCX, etc.) in backup. Increases backup size.</p>
+                </div>
+              </label>
+            </div>
+
+            <button
+              class="btn btn-primary"
+              :disabled="creatingBackup"
+              @click="createBackup"
+            >
+              <span v-if="creatingBackup" class="loading loading-spinner loading-sm"></span>
+              <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+              {{ creatingBackup ? 'Creating...' : 'Create Backup' }}
+            </button>
+
+            <div v-if="backupMessage" class="alert" :class="backupMessageType === 'success' ? 'alert-success' : 'alert-error'">
+              <div>{{ backupMessage }}</div>
+            </div>
+          </div>
+
+          <!-- Existing Backups Section -->
+          <div class="space-y-4 mt-6">
+            <div class="divider text-sm text-base-content/50">
+              Existing Backups
+              <button class="btn btn-xs btn-ghost ml-2" @click="loadBackups" :disabled="loadingBackups">
+                <svg class="w-4 h-4" :class="{ 'animate-spin': loadingBackups }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+
+            <div v-if="loadingBackups" class="flex justify-center py-4">
+              <span class="loading loading-spinner"></span>
+            </div>
+
+            <div v-else-if="backups.length === 0" class="text-center py-4 text-base-content/50">
+              <svg class="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+              <p>No backups yet</p>
+            </div>
+
+            <div v-else class="space-y-3">
+              <div v-for="backup in backups" :key="backup.filename" class="bg-base-300 rounded-lg p-4">
+                <div class="flex items-start justify-between">
+                  <div class="flex-1">
+                    <div class="font-medium text-sm">{{ backup.collection_id || 'default' }}</div>
+                    <div class="text-xs text-base-content/60 mt-1">
+                      {{ formatBackupDate(backup.created_at) }} · {{ backup.size_mb?.toFixed(2) || '?' }} MB
+                    </div>
+                    <div v-if="backup.description" class="text-xs text-base-content/70 mt-1 italic">
+                      "{{ backup.description }}"
+                    </div>
+                    <div class="flex flex-wrap gap-1 mt-2">
+                      <span v-if="backup.includes_documents" class="badge badge-xs badge-success">Includes docs</span>
+                      <span v-else class="badge badge-xs badge-ghost">Index only</span>
+                      <span class="badge badge-xs badge-outline">{{ backup.storage_type || 'json' }}</span>
+                    </div>
+                  </div>
+                  <div class="flex gap-1">
+                    <button
+                      class="btn btn-xs btn-ghost"
+                      title="Download"
+                      @click="downloadBackup(backup.filename)"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn-xs btn-primary"
+                      title="Restore"
+                      :disabled="restoringBackup === backup.filename"
+                      @click="confirmRestore(backup)"
+                    >
+                      <span v-if="restoringBackup === backup.filename" class="loading loading-spinner loading-xs"></span>
+                      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn-xs btn-ghost text-error"
+                      title="Delete"
+                      :disabled="deletingBackup === backup.filename"
+                      @click="confirmDeleteBackup(backup)"
+                    >
+                      <span v-if="deletingBackup === backup.filename" class="loading loading-spinner loading-xs"></span>
+                      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Restore Confirmation Modal -->
+      <dialog ref="restoreModal" class="modal">
+        <div class="modal-box">
+          <h3 class="font-bold text-lg">Restore Backup</h3>
+          <p class="py-4">
+            Restore from backup: <strong>{{ selectedBackup?.filename }}</strong>
+          </p>
+          <div class="form-control mb-4">
+            <label class="label cursor-pointer justify-start gap-4">
+              <input
+                type="checkbox"
+                class="checkbox checkbox-warning"
+                v-model="restoreOverwrite"
+              />
+              <div>
+                <span class="label-text font-medium">Overwrite existing data</span>
+                <p class="text-xs text-base-content/60">Replace current collection data with backup contents</p>
+              </div>
+            </label>
+          </div>
+          <div v-if="restoreOverwrite" class="alert alert-warning mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span class="text-sm">This will replace all existing data in the collection!</span>
+          </div>
+          <div class="modal-action">
+            <button class="btn" @click="closeRestoreModal">Cancel</button>
+            <button class="btn btn-primary" @click="restoreBackup" :disabled="restoringBackup">
+              <span v-if="restoringBackup" class="loading loading-spinner loading-sm"></span>
+              {{ restoringBackup ? 'Restoring...' : 'Restore' }}
+            </button>
+          </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+          <button @click="closeRestoreModal">close</button>
+        </form>
+      </dialog>
+
+      <!-- Delete Backup Confirmation Modal -->
+      <dialog ref="deleteBackupModal" class="modal">
+        <div class="modal-box">
+          <h3 class="font-bold text-lg text-error">Delete Backup</h3>
+          <p class="py-4">
+            Are you sure you want to delete this backup?<br>
+            <strong>{{ selectedBackup?.filename }}</strong>
+          </p>
+          <p class="text-sm text-base-content/70">This action cannot be undone.</p>
+          <div class="modal-action">
+            <button class="btn" @click="closeDeleteBackupModal">Cancel</button>
+            <button class="btn btn-error" @click="deleteBackup" :disabled="deletingBackup">
+              <span v-if="deletingBackup" class="loading loading-spinner loading-sm"></span>
+              {{ deletingBackup ? 'Deleting...' : 'Delete' }}
+            </button>
+          </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+          <button @click="closeDeleteBackupModal">close</button>
+        </form>
+      </dialog>
 
       <!-- API Documentation -->
       <div id="api-docs" class="card bg-base-200 scroll-mt-36">
@@ -1000,7 +1357,9 @@ const sectionIds = [
   'collection-info',
   'text-chunking',
   'reindex',
+  'index-repair',
   'embedding-model',
+  'backups',
   'api-docs',
   'about',
   'danger-zone'
@@ -1094,6 +1453,28 @@ const reindexing = ref(false)
 const reindexJob = ref(null)
 const reindexPollInterval = ref(null)
 const showReindexResult = ref(false) // Only show completed/failed status when we watched it complete
+
+// Backup state (v3.0)
+const backups = ref([])
+const loadingBackups = ref(false)
+const creatingBackup = ref(false)
+const restoringBackup = ref(null) // filename of backup being restored
+const deletingBackup = ref(null) // filename of backup being deleted
+const backupDescription = ref('')
+const backupIncludeDocuments = ref(true)
+const backupMessage = ref('')
+const backupMessageType = ref('success')
+const selectedBackup = ref(null)
+const restoreOverwrite = ref(false)
+const restoreModal = ref(null)
+const deleteBackupModal = ref(null)
+
+// Index repair state
+const diagnosingIndex = ref(false)
+const indexDiagnosis = ref(null)
+const repairingIndex = ref(null) // 'rebuild' or 'truncate' when repairing
+const repairMessage = ref('')
+const repairMessageType = ref('success')
 
 
 // Computed
@@ -1532,6 +1913,180 @@ const stopReindexPolling = () => {
   }
 }
 
+// Backup Methods (v3.0)
+const loadBackups = async () => {
+  loadingBackups.value = true
+  try {
+    const response = await axios.get('/api/backups')
+    backups.value = response.data.backups || []
+  } catch (error) {
+    console.error('Failed to load backups:', error)
+    backups.value = []
+  } finally {
+    loadingBackups.value = false
+  }
+}
+
+const createBackup = async () => {
+  creatingBackup.value = true
+  backupMessage.value = ''
+
+  try {
+    const collectionId = collectionStore.currentCollectionId
+    const response = await axios.post('/api/backups', null, {
+      params: {
+        collection_id: collectionId,
+        description: backupDescription.value,
+        include_documents: backupIncludeDocuments.value
+      }
+    })
+
+    backupMessageType.value = 'success'
+    backupMessage.value = `Backup created: ${response.data.filename} (${response.data.size_mb?.toFixed(2)} MB)`
+    backupDescription.value = ''
+
+    // Refresh backup list
+    await loadBackups()
+  } catch (error) {
+    backupMessageType.value = 'error'
+    backupMessage.value = error.response?.data?.detail || 'Failed to create backup'
+  } finally {
+    creatingBackup.value = false
+  }
+}
+
+const confirmRestore = (backup) => {
+  selectedBackup.value = backup
+  restoreOverwrite.value = false
+  restoreModal.value?.showModal()
+}
+
+const closeRestoreModal = () => {
+  restoreModal.value?.close()
+  selectedBackup.value = null
+}
+
+const restoreBackup = async () => {
+  if (!selectedBackup.value) return
+
+  restoringBackup.value = selectedBackup.value.filename
+
+  try {
+    const response = await axios.post(`/api/backups/${selectedBackup.value.filename}/restore`, null, {
+      params: {
+        overwrite: restoreOverwrite.value
+      }
+    })
+
+    backupMessageType.value = 'success'
+    backupMessage.value = `Restored ${response.data.files_restored?.indexes || 0} index files and ${response.data.files_restored?.documents || 0} documents`
+
+    closeRestoreModal()
+
+    // Refresh health stats and collections
+    await loadHealth()
+    await collectionStore.loadCollections()
+    emit('stats-updated')
+  } catch (error) {
+    backupMessageType.value = 'error'
+    backupMessage.value = error.response?.data?.detail || 'Failed to restore backup'
+  } finally {
+    restoringBackup.value = null
+  }
+}
+
+const confirmDeleteBackup = (backup) => {
+  selectedBackup.value = backup
+  deleteBackupModal.value?.showModal()
+}
+
+const closeDeleteBackupModal = () => {
+  deleteBackupModal.value?.close()
+  selectedBackup.value = null
+}
+
+const deleteBackup = async () => {
+  if (!selectedBackup.value) return
+
+  deletingBackup.value = selectedBackup.value.filename
+
+  try {
+    await axios.delete(`/api/backups/${selectedBackup.value.filename}`)
+
+    closeDeleteBackupModal()
+    await loadBackups()
+  } catch (error) {
+    backupMessageType.value = 'error'
+    backupMessage.value = error.response?.data?.detail || 'Failed to delete backup'
+  } finally {
+    deletingBackup.value = null
+  }
+}
+
+const downloadBackup = (filename) => {
+  window.open(`/api/backups/${filename}/download`, '_blank')
+}
+
+const formatBackupDate = (isoString) => {
+  if (!isoString) return 'Unknown'
+  try {
+    const date = new Date(isoString)
+    return date.toLocaleString()
+  } catch {
+    return isoString
+  }
+}
+
+// Index Repair Methods
+const diagnoseIndex = async () => {
+  diagnosingIndex.value = true
+  indexDiagnosis.value = null
+  repairMessage.value = ''
+
+  try {
+    const collectionId = collectionStore.currentCollectionId
+    const response = await axios.get(`/api/index/diagnose?collection_id=${collectionId}`)
+    indexDiagnosis.value = response.data
+  } catch (error) {
+    console.error('Failed to diagnose index:', error)
+    repairMessageType.value = 'error'
+    repairMessage.value = error.response?.data?.detail || 'Failed to diagnose index'
+  } finally {
+    diagnosingIndex.value = false
+  }
+}
+
+const repairIndex = async (method) => {
+  repairingIndex.value = method
+  repairMessage.value = ''
+
+  try {
+    const collectionId = collectionStore.currentCollectionId
+    const response = await axios.post(`/api/index/repair?collection_id=${collectionId}&method=${method}`)
+
+    if (response.data.success) {
+      repairMessageType.value = 'success'
+      repairMessage.value = response.data.message || 'Index repaired successfully!'
+
+      // Re-diagnose to show updated status
+      await diagnoseIndex()
+
+      // Refresh health stats
+      await loadHealth()
+      emit('stats-updated')
+    } else {
+      repairMessageType.value = 'error'
+      repairMessage.value = response.data.error || 'Repair failed'
+    }
+  } catch (error) {
+    console.error('Failed to repair index:', error)
+    repairMessageType.value = 'error'
+    repairMessage.value = error.response?.data?.detail || 'Failed to repair index'
+  } finally {
+    repairingIndex.value = null
+  }
+}
+
 // Watch for collection changes
 watch(() => collectionStore.currentCollectionId, async () => {
   await loadHealth()
@@ -1565,7 +2120,8 @@ onMounted(async () => {
   await Promise.all([
     loadHealth(),
     loadConfig(),
-    loadAvailableModels()
+    loadAvailableModels(),
+    loadBackups()
   ])
   loadAISettings()
   checkOllamaStatus()
