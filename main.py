@@ -218,13 +218,13 @@ async def upload_documents(
     document_dir = indexer_manager.get_documents_path(collection_id)
 
     # Validate all files have supported extensions
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'}
     for file in files:
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in SUPPORTED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported types: PDF, TXT, DOCX, CSV",
+                detail=f"File {file.filename} has unsupported type. Supported types: PDF, TXT, DOCX, CSV, MD, JSON",
             )
 
     indexed_docs = []

@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 export const useSearchStore = defineStore('search', () => {
   // Search state
   const query = ref('')
-  const topK = ref(10)
+  const topK = ref(parseInt(localStorage.getItem('asymptote_default_top_k')) || 10)
   const results = ref([])
   const lastQuery = ref('')
   const synthesis = ref('')

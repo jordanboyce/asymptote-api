@@ -35,12 +35,12 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.docx,.csv"
+            accept=".pdf,.txt,.docx,.csv,.md,.json"
             class="file-input file-input-bordered w-full"
             @change="handleFileSelect"
           />
           <label class="label">
-            <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV)</span>
+            <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV, MD, JSON)</span>
           </label>
         </div>
 
@@ -55,7 +55,7 @@
             @change="handleFolderSelect"
           />
           <label class="label">
-            <span class="label-text-alt">Select a folder - only supported file types will be uploaded (PDF, TXT, DOCX, CSV)</span>
+            <span class="label-text-alt">Select a folder - only supported file types will be uploaded (PDF, TXT, DOCX, CSV, MD, JSON)</span>
           </label>
         </div>
 
@@ -78,7 +78,7 @@
               >
                 <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
                 <CloudUpload v-else :size="16" />
-                {{ uploading ? 'Uploading...' : 'Upload Now' }}
+                {{ uploading ? 'Indexing...' : 'Upload Now' }}
               </button>
             </div>
           </div>
@@ -243,7 +243,7 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
-      <span>No documents found. Upload some PDFs to get started!</span>
+      <span>No documents found. Upload some documents to get started!</span>
     </div>
 
     <!-- Error Alert -->
@@ -260,11 +260,11 @@
         <h3 class="font-bold text-lg">Confirm Delete</h3>
         <p v-if="documentToDelete" class="py-4">
           Are you sure you want to delete <strong>{{ documentToDelete.filename }}</strong>?
-          This will remove the PDF file and all associated metadata from the index.
+          This will remove the document and all associated metadata from the index.
         </p>
         <p v-else class="py-4">
           Are you sure you want to delete <strong>{{ selectedDocuments.length }} document(s)</strong>?
-          This will remove all PDF files and their associated metadata from the index.
+          This will remove all selected documents and their associated metadata from the index.
         </p>
         <div v-if="!documentToDelete && selectedDocuments.length > 0" class="max-h-40 overflow-y-auto mb-4">
           <ul class="list-disc list-inside text-sm space-y-1">
@@ -310,7 +310,7 @@ const uploadError = ref('')
 const uploadResult = ref({})
 
 // Supported file extensions
-const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.csv']
+const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.csv', '.md', '.json']
 
 // Document management state
 const documents = ref([])
@@ -350,7 +350,7 @@ const handleFolderSelect = (event) => {
   // Show info if some files were filtered out
   const skippedCount = allFiles.length - supportedFiles.length
   if (skippedCount > 0) {
-    uploadError.value = `${skippedCount} unsupported file(s) skipped. Only PDF, TXT, DOCX, and CSV files are supported.`
+    uploadError.value = `${skippedCount} unsupported file(s) skipped. Only PDF, TXT, DOCX, CSV, MD, and JSON files are supported.`
   }
 }
 

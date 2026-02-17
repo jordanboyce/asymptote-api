@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentExtractor:
-    """Extracts text from various document formats (PDF, TXT, DOCX, CSV)."""
+    """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON)."""
 
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'}
 
     def extract_text(self, file_path: Path) -> Dict[int, str]:
         """
@@ -48,6 +48,10 @@ class DocumentExtractor:
             return self._extract_docx(file_path)
         elif file_ext == '.csv':
             return self._extract_csv(file_path)
+        elif file_ext == '.md':
+            return self._extract_markdown(file_path)
+        elif file_ext == '.json':
+            return self._extract_json(file_path)
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
 
@@ -201,6 +205,100 @@ class DocumentExtractor:
                 lines.append(row_text)
 
             page_texts[page_num] = "\n".join(lines)
+
+        return page_texts
+
+    def _extract_markdown(self, md_path: Path) -> Dict[int, str]:
+        """
+        Extract text from Markdown file, chunking by headers.
+
+        Returns:
+            Dictionary mapping section numbers to text (split on h1/h2 headers)
+        """
+        import re
+
+        try:
+            with open(md_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            logger.warning(f"UTF-8 decoding failed for {md_path.name}, trying latin-1")
+            with open(md_path, 'r', encoding='latin-1') as f:
+                content = f.read()
+
+        if not content.strip():
+            logger.warning(f"Empty markdown file: {md_path.name}")
+            return {1: ""}
+
+        # Split on h1 (# ) or h2 (## ) headers
+        # Keep the header with the section
+        header_pattern = r'(?=^#{1,2}\s+)'
+        sections = re.split(header_pattern, content, flags=re.MULTILINE)
+
+        # Filter out empty sections
+        sections = [s.strip() for s in sections if s.strip()]
+
+        if not sections:
+            return {1: content.strip()}
+
+        page_texts = {}
+        for i, section in enumerate(sections, start=1):
+            page_texts[i] = section
+
+        return page_texts
+
+    def _extract_json(self, json_path: Path) -> Dict[int, str]:
+        """
+        Extract text from JSON file.
+
+        Returns:
+            Dictionary with sections based on top-level keys or array items
+        """
+        import json
+
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except UnicodeDecodeError:
+            logger.warning(f"UTF-8 decoding failed for {json_path.name}, trying latin-1")
+            with open(json_path, 'r', encoding='latin-1') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {json_path.name}: {e}")
+            raise Exception(f"Failed to parse JSON file: {e}")
+
+        page_texts = {}
+
+        if isinstance(data, dict):
+            # For objects, each top-level key becomes a section
+            if not data:
+                return {1: "{}"}
+
+            for i, (key, value) in enumerate(data.items(), start=1):
+                # Format as "key: value" for better semantic search
+                value_str = json.dumps(value, indent=2) if isinstance(value, (dict, list)) else str(value)
+                page_texts[i] = f"{key}: {value_str}"
+
+        elif isinstance(data, list):
+            # For arrays, chunk items (10 items per section)
+            if not data:
+                return {1: "[]"}
+
+            items_per_page = 10
+            for start_idx in range(0, len(data), items_per_page):
+                page_num = (start_idx // items_per_page) + 1
+                end_idx = min(start_idx + items_per_page, len(data))
+                chunk = data[start_idx:end_idx]
+
+                # Format each item
+                lines = []
+                for j, item in enumerate(chunk, start=start_idx):
+                    item_str = json.dumps(item, indent=2) if isinstance(item, (dict, list)) else str(item)
+                    lines.append(f"[{j}]: {item_str}")
+
+                page_texts[page_num] = "\n\n".join(lines)
+        else:
+            # Primitive value
+            page_texts[1] = str(data)
 
         return page_texts
 

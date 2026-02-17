@@ -291,6 +291,13 @@ class OllamaProvider(AIProvider):
 
 ### 4. Additional Enhancements
 
+#### 4.0 Markdown File Support (Quick Win)
+- **Add .md file support**
+  - Treat as structured text (similar to TXT)
+  - Optionally chunk on headers (h1/h2 boundaries)
+  - Strip markdown syntax for cleaner embeddings, or keep for context
+  - Common use case: AI-generated docs, READMEs, notes
+
 #### 4.1 Search Configuration
 - **Feature:** Per-search advanced options
 - **Options:**
@@ -331,31 +338,49 @@ class OllamaProvider(AIProvider):
 
 ## Future Considerations (v3.0+)
 
-### 1. Multi-modal Search
+### 1. Format-Aware Indexing & Search (Priority)
+- **Row-level indexing for CSV/tabular data**
+  - Each row indexed as its own chunk with headers embedded
+  - Metadata stores column names, row number, and raw values
+  - Search results render as tables instead of text snippets
+  - Unified search across mixed content (PDFs + CSVs in same results)
+- **Chunk metadata schema extension**
+  - Add `format` field (pdf, txt, docx, csv)
+  - Add `columns` and `values` arrays for tabular data
+  - Frontend detects format and renders appropriately
+
+### 2. OCR for Image-Based PDFs (Priority)
+- **Scanned document support**
+  - Detect when PDF pages contain no extractable text
+  - Fall back to OCR using pytesseract + pdf2image
+  - Support for large collections of scanned document PDFs
+  - Optional GPU acceleration with EasyOCR as alternative
+
+### 3. Additional Multi-modal Search
 - Support image search (extract text from images with OCR)
 - Search within tables and charts
 - Audio transcription and search (Whisper integration)
 
-### 2. Advanced AI Features
+### 4. Advanced AI Features
 - Query enhancement (rewrite user queries for better results)
 - Multi-hop reasoning (combine info from multiple documents)
 - Document summarization (generate executive summaries)
 - Question answering with citations
 
-### 3. Collaboration Features
+### 5. Collaboration Features
 - Multi-user support with authentication
 - Shared document collections
 - User-specific search history
 - Document annotations and highlights
 
-### 4. Enterprise Features
+### 6. Enterprise Features
 - Role-based access control (RBAC)
 - Audit logging
 - SSO integration (SAML, OAuth)
 - API rate limiting and quotas
 - Document retention policies
 
-### 5. Performance & Scaling
+### 7. Performance & Scaling
 - Distributed FAISS index (multiple shards)
 - GPU acceleration for embedding generation
 - Redis caching layer
@@ -376,10 +401,11 @@ class OllamaProvider(AIProvider):
 2. Metadata storage toggle in UI
 3. Search configuration options
 
-**Phase 3 (Future):**
-1. Batch operations
-2. Performance monitoring
-3. Advanced chunking strategies
+**Phase 3 (v3.0 - Format & OCR):**
+1. Format-aware indexing for CSV/tabular data (row-level chunks, table rendering)
+2. OCR for image-based/scanned PDFs (pytesseract + pdf2image)
+3. Batch operations
+4. Performance monitoring
 
 ---
 

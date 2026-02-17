@@ -496,9 +496,25 @@ onMounted(async () => {
   // Then load stats for current collection
   loadStats()
 
-  // Initialize theme from localStorage
-  const savedTheme = localStorage.getItem('theme') || 'light'
-  isDark.value = savedTheme === 'dark'
-  document.documentElement.setAttribute('data-theme', savedTheme)
+  // Initialize theme: check localStorage first, then system preference
+  const savedTheme = localStorage.getItem('theme')
+  if (savedTheme) {
+    // User has explicitly set a preference
+    isDark.value = savedTheme === 'dark'
+    document.documentElement.setAttribute('data-theme', savedTheme)
+  } else {
+    // No saved preference - use system theme
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    isDark.value = prefersDark
+    document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+  }
+
+  // Listen for system theme changes (only if user hasn't set a preference)
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('theme')) {
+      isDark.value = e.matches
+      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
+    }
+  })
 })
 </script>

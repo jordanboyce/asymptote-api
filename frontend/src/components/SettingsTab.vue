@@ -478,7 +478,7 @@
     <div class="card bg-base-200">
       <div class="card-body">
         <h3 class="card-title">Search Configuration</h3>
-        <div class="form-control">
+        <div class="form-control w-full max-w-xs">
           <label class="label">
             <span class="label-text">Default Number of Results</span>
             <span class="label-text-alt">1-50</span>
@@ -488,8 +488,10 @@
             type="number"
             min="1"
             max="50"
-            class="input input-bordered w-full max-w-xs"
+            class="input input-bordered w-full"
+            @change="saveDefaultTopK"
           />
+          <p class="text-xs text-base-content/60 mt-2">Sets the default for new searches. You can override this per search.</p>
         </div>
       </div>
     </div>
@@ -697,8 +699,20 @@
               :checked="isDark"
               @change="toggleTheme"
             />
-            <span class="label-text">Dark Mode</span>
+            <div>
+              <span class="label-text">Dark Mode</span>
+              <p class="text-xs text-base-content/60">
+                {{ isUsingSystemTheme ? 'Following system preference' : 'Manual override' }}
+              </p>
+            </div>
           </label>
+          <button
+            v-if="!isUsingSystemTheme"
+            class="btn btn-xs btn-ghost mt-2 w-fit"
+            @click="resetToSystemTheme"
+          >
+            Reset to system theme
+          </button>
         </div>
       </div>
     </div>
@@ -725,9 +739,9 @@
         <h3 class="card-title">About Asymptote</h3>
         <div class="prose prose-sm max-w-none">
           <p>
-            <strong>Asymptote</strong> is a self-hosted semantic search engine for PDF documents.
-            Upload PDFs, search their contents using natural language, and get back relevant passages
-            with direct links to the source pages.
+            <strong>Asymptote</strong> is a self-hosted semantic search engine for documents.
+            Upload documents (PDF, TXT, DOCX, CSV, Markdown, JSON), search their contents using natural language,
+            and get back relevant passages with direct links to the source.
           </p>
           <p class="text-sm italic">
             Why "Asymptote"? In mathematics, an asymptote is a line that a curve approaches but never
@@ -741,7 +755,7 @@
               <li><strong>Frontend:</strong> Vue 3 + Vite + Tailwind CSS + DaisyUI</li>
               <li><strong>Embeddings:</strong> sentence-transformers (all-MiniLM-L6-v2)</li>
               <li><strong>Vector Search:</strong> FAISS (Facebook AI Similarity Search)</li>
-              <li><strong>PDF Processing:</strong> pypdf + pdfplumber</li>
+              <li><strong>Document Processing:</strong> pypdf, pdfplumber, python-docx, pandas</li>
               <li><strong>Metadata Storage:</strong> SQLite or JSON</li>
             </ul>
           </div>
@@ -791,7 +805,7 @@
           This will <strong>permanently delete</strong>:
         </p>
         <ul class="list-disc list-inside space-y-1 text-sm mb-4">
-          <li>All uploaded PDF files</li>
+          <li>All uploaded documents</li>
           <li>All vector embeddings and indexes</li>
           <li>All metadata (documents, chunks, search history)</li>
         </ul>
@@ -825,8 +839,15 @@ const collectionStore = useCollectionStore()
 // System info
 const loading = ref(false)
 const health = ref({})
-const defaultTopK = ref(10)
+const defaultTopK = ref(parseInt(localStorage.getItem('asymptote_default_top_k')) || 10)
 const isDark = ref(false)
+
+// Save default top_k to localStorage
+const saveDefaultTopK = () => {
+  const value = Math.max(1, Math.min(50, defaultTopK.value || 10))
+  defaultTopK.value = value
+  localStorage.setItem('asymptote_default_top_k', value.toString())
+}
 const clearing = ref(false)
 const clearSuccess = ref(false)
 const clearError = ref('')
@@ -1031,11 +1052,23 @@ const loadHealth = async () => {
   }
 }
 
+// Check if using system theme (no manual override)
+const isUsingSystemTheme = ref(!localStorage.getItem('theme'))
+
 const toggleTheme = () => {
   isDark.value = !isDark.value
   const theme = isDark.value ? 'dark' : 'light'
   document.documentElement.setAttribute('data-theme', theme)
   localStorage.setItem('theme', theme)
+  isUsingSystemTheme.value = false
+}
+
+const resetToSystemTheme = () => {
+  localStorage.removeItem('theme')
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  isDark.value = prefersDark
+  document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+  isUsingSystemTheme.value = true
 }
 
 const confirmClearAll = () => {
@@ -1329,9 +1362,15 @@ onMounted(async () => {
     startReindexPolling()
   }
 
-  // Load theme preference
-  const savedTheme = localStorage.getItem('theme') || 'light'
-  isDark.value = savedTheme === 'dark'
+  // Load theme preference (check system if no saved preference)
+  const savedTheme = localStorage.getItem('theme')
+  if (savedTheme) {
+    isDark.value = savedTheme === 'dark'
+    isUsingSystemTheme.value = false
+  } else {
+    isDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
+    isUsingSystemTheme.value = true
+  }
 })
 
 // Cleanup on unmount

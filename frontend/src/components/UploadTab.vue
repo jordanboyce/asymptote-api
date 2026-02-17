@@ -11,12 +11,12 @@
         ref="fileInput"
         type="file"
         multiple
-        accept=".pdf,.txt,.docx,.csv"
+        accept=".pdf,.txt,.docx,.csv,.md,.json"
         class="file-input file-input-bordered w-full"
         @change="handleFileSelect"
       />
       <label class="label">
-        <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV)</span>
+        <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV, MD, JSON)</span>
       </label>
     </div>
 
@@ -139,7 +139,7 @@
         <h3 class="font-bold">Upload Tips</h3>
         <div class="text-xs">
           <ul class="list-disc list-inside mt-1">
-            <li>Supported formats: PDF, TXT, DOCX, CSV</li>
+            <li>Supported formats: PDF, TXT, DOCX, CSV, MD, JSON</li>
             <li>Files are processed and indexed automatically</li>
             <li>Larger files may take longer to process</li>
             <li>Duplicate files (by content) are automatically detected</li>

@@ -48,7 +48,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
           <span v-if="loading" class="loading loading-spinner"></span>
-          {{ loading ? (useAI && aiActive ? 'AI Processing...' : 'Searching...') : 'Search' }}
+          {{ loading ? (aiActive ? 'AI Processing...' : 'Searching...') : 'Search' }}
         </button>
       </div>
     </div>
@@ -67,97 +67,62 @@
       />
     </div>
 
-    <!-- AI Controls - Collapsible -->
-    <div v-if="hasAnyAvailableProvider" class="collapse collapse-arrow bg-base-200 border border-base-300 rounded-box">
-      <input type="checkbox" v-model="aiSectionExpanded" />
-      <div class="collapse-title py-3 min-h-0">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <h3 class="font-semibold text-sm">AI Enhancement</h3>
-            <span v-if="aiActive" class="badge badge-xs badge-primary">Active</span>
-            <span v-if="checkingProviders" class="loading loading-spinner loading-xs"></span>
-          </div>
-          <div class="flex items-center gap-2" @click.stop>
-            <span v-if="aiActive" class="text-xs text-base-content/60">{{ activeFeaturesList }}</span>
-            <button
-              class="btn btn-xs btn-ghost"
-              @click.stop="$emit('switch-tab', 'settings')"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-          </div>
+    <!-- AI Provider Selection - Only show if features are enabled in Settings -->
+    <div v-if="hasAnyProvider && aiFeaturesEnabled" class="card bg-base-200 p-3">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+          <span class="font-medium text-sm">AI Providers</span>
+          <span class="text-xs text-base-content/60">({{ activeFeaturesList }})</span>
+        </div>
+        <button class="btn btn-xs btn-ghost" @click="$emit('switch-tab', 'settings')">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <!-- Anthropic -->
+        <label v-if="hasAnthropicKey" class="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
+               :class="selectedProviders.includes('anthropic') ? 'bg-primary/20 border border-primary' : 'bg-base-300 hover:bg-base-100'">
+          <input type="checkbox" class="checkbox checkbox-xs checkbox-primary"
+                 :checked="selectedProviders.includes('anthropic')"
+                 @change="toggleProvider('anthropic')" />
+          <span class="text-sm">Claude</span>
+        </label>
+        <!-- OpenAI -->
+        <label v-if="hasOpenAIKey" class="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
+               :class="selectedProviders.includes('openai') ? 'bg-success/20 border border-success' : 'bg-base-300 hover:bg-base-100'">
+          <input type="checkbox" class="checkbox checkbox-xs checkbox-success"
+                 :checked="selectedProviders.includes('openai')"
+                 @change="toggleProvider('openai')" />
+          <span class="text-sm">ChatGPT</span>
+        </label>
+        <!-- Ollama -->
+        <div v-if="ollamaAvailable" class="tooltip tooltip-bottom" data-tip="Slower than cloud models, but free and private">
+          <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
+                 :class="selectedProviders.includes('ollama') ? 'bg-info/20 border border-info' : 'bg-base-300 hover:bg-base-100'">
+            <input type="checkbox" class="checkbox checkbox-xs checkbox-info"
+                   :checked="selectedProviders.includes('ollama')"
+                   @change="toggleProvider('ollama')" />
+            <span class="text-sm">Ollama</span>
+            <span class="text-xs opacity-60">local</span>
+          </label>
         </div>
       </div>
-      <div class="collapse-content">
-        <!-- Provider Toggles -->
-        <div class="space-y-2 pt-2">
-          <!-- Anthropic -->
-          <label v-if="anthropicAvailable" class="label cursor-pointer justify-start gap-3 py-2 hover:bg-base-300 rounded-lg px-2">
-            <input
-              type="checkbox"
-              class="toggle toggle-sm toggle-primary"
-              :checked="selectedProviders.includes('anthropic')"
-              @change="toggleProvider('anthropic')"
-            />
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="label-text font-medium">Anthropic Claude</span>
-                <span class="badge badge-xs badge-primary">Cloud</span>
-              </div>
-              <p class="text-xs text-base-content/60">High quality - costs API tokens</p>
-            </div>
-          </label>
-
-          <!-- OpenAI -->
-          <label v-if="openaiAvailable" class="label cursor-pointer justify-start gap-3 py-2 hover:bg-base-300 rounded-lg px-2">
-            <input
-              type="checkbox"
-              class="toggle toggle-sm toggle-success"
-              :checked="selectedProviders.includes('openai')"
-              @change="toggleProvider('openai')"
-            />
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="label-text font-medium">OpenAI GPT</span>
-                <span class="badge badge-xs badge-success">Cloud</span>
-              </div>
-              <p class="text-xs text-base-content/60">Fast responses - costs API tokens</p>
-            </div>
-          </label>
-
-          <!-- Ollama -->
-          <label v-if="ollamaAvailable" class="label cursor-pointer justify-start gap-3 py-2 hover:bg-base-300 rounded-lg px-2">
-            <input
-              type="checkbox"
-              class="toggle toggle-sm toggle-info"
-              :checked="selectedProviders.includes('ollama')"
-              @change="toggleProvider('ollama')"
-            />
-            <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <span class="label-text font-medium">Ollama (Local)</span>
-                <span class="badge badge-xs badge-info">Free</span>
-              </div>
-              <p class="text-xs text-base-content/60">Private & free - slower (1-2 min on CPU)</p>
-            </div>
-          </label>
-
-          <!-- No providers selected warning -->
-          <div v-if="availableProviders.length > 0 && selectedProviders.length === 0" class="alert alert-warning py-2">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-4 h-4">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-            </svg>
-            <span class="text-xs">Select at least one provider to enable AI features</span>
-          </div>
-        </div>
-      </div>
+      <p v-if="selectedProviders.length === 0" class="text-xs text-base-content/60 mt-2">
+        No providers selected - search will not use AI
+      </p>
+      <p v-else-if="selectedProviders.length > 1" class="text-xs text-base-content/60 mt-2">
+        {{ selectedProviders.length }} providers selected - results from each will be shown
+      </p>
+      <p v-if="selectedProviders.includes('ollama') && selectedProviders.length === 1" class="text-xs text-info mt-2">
+        Ollama runs locally - slower but private and free
+      </p>
     </div>
 
-    <!-- AI Feature Prompt (only show if no providers configured at all) -->
-    <div v-if="!aiActive && !hasAnyProvider" class="alert alert-info">
+    <!-- AI Feature Prompt (only show if no AI configured) -->
+    <div v-if="!hasAnyProvider" class="alert alert-info">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
@@ -294,7 +259,7 @@
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
               </svg>
-              Download PDF
+              Download
             </a>
           </div>
         </div>
@@ -389,165 +354,89 @@ const cachedData = ref(null)
 // History modal state
 const showHistoryModal = ref(false)
 
-// AI Section collapsed state
-const aiSectionExpanded = ref(localStorage.getItem('asymptote_ai_section_expanded') !== 'false')
-watch(aiSectionExpanded, (val) => {
-  localStorage.setItem('asymptote_ai_section_expanded', val.toString())
-})
+// AI Settings - Read from Settings tab's localStorage values
+// API keys and feature toggles (rerank/synthesize) are managed in Settings
+// Provider selection for each search is managed here
 
-// Provider availability state (actual availability, not just localStorage)
-const checkingProviders = ref(false)
-const ollamaAvailable = ref(false)
-const anthropicAvailable = ref(false)
-const openaiAvailable = ref(false)
-
-// Provider selection state
-const PROVIDER_SELECTION_KEY = 'asymptote_selected_providers'
-const selectedProviders = ref([])
-
-// Check which providers have keys/models in localStorage (used for initial check)
+// Check which providers have keys/models configured
 const hasAnthropicKey = computed(() => !!localStorage.getItem('ai_api_key_anthropic'))
 const hasOpenAIKey = computed(() => !!localStorage.getItem('ai_api_key_openai'))
 const hasOllamaModel = computed(() => !!localStorage.getItem('ollama_model'))
+const hasAnyProvider = computed(() => hasAnthropicKey.value || hasOpenAIKey.value || ollamaAvailable.value)
 
-// Check if any provider is actually available and operational
-const hasAnyAvailableProvider = computed(() => ollamaAvailable.value || anthropicAvailable.value || openaiAvailable.value)
-const hasAnyProvider = computed(() => hasAnthropicKey.value || hasOpenAIKey.value || hasOllamaModel.value)
-const hasBothProviders = computed(() => hasAnthropicKey.value && hasOpenAIKey.value)
+// Provider availability (for Ollama, we need to check if it's actually running)
+const ollamaAvailable = ref(false)
 
-const cloudProvidersCount = computed(() => {
-  let count = 0
-  if (hasAnthropicKey.value) count++
-  if (hasOpenAIKey.value) count++
-  return count
-})
+// Selected providers for this search session
+const PROVIDER_SELECTION_KEY = 'asymptote_selected_providers'
+const selectedProviders = ref([])
 
-const cloudProvidersSelected = computed(() => {
-  return hasAnthropicKey.value && hasOpenAIKey.value &&
-         selectedProviders.value.includes('anthropic') &&
-         selectedProviders.value.includes('openai')
-})
-
-const availableProviders = computed(() => {
-  const providers = []
-  if (anthropicAvailable.value) providers.push('anthropic')
-  if (openaiAvailable.value) providers.push('openai')
-  if (ollamaAvailable.value) providers.push('ollama')
-  return providers
-})
-
-// Check provider availability on mount
-const checkProviderAvailability = async () => {
-  checkingProviders.value = true
-
-  try {
-    // For cloud providers (Anthropic, OpenAI), trust the localStorage key
-    // Validation happens at search time - no need to pre-validate
-    anthropicAvailable.value = hasAnthropicKey.value
-    openaiAvailable.value = hasOpenAIKey.value
-
-    // For Ollama, actually check if it's running since it's a local service
-    if (hasOllamaModel.value) {
-      try {
-        const response = await axios.get('/api/ollama/status')
-        ollamaAvailable.value = response.data.available === true
-      } catch (e) {
-        ollamaAvailable.value = false
-      }
-    } else {
-      ollamaAvailable.value = false
+// Initialize selected providers from localStorage
+const initializeProviders = () => {
+  const saved = localStorage.getItem(PROVIDER_SELECTION_KEY)
+  if (saved) {
+    try {
+      selectedProviders.value = JSON.parse(saved)
+    } catch (e) {
+      selectedProviders.value = []
     }
-  } finally {
-    checkingProviders.value = false
-
-    // Re-initialize selected providers based on actual availability
-    reinitializeProviders()
   }
 }
 
-const reinitializeProviders = () => {
-  // Filter to only include providers that are actually available
-  const validProviders = selectedProviders.value.filter(p =>
-    (p === 'anthropic' && anthropicAvailable.value) ||
-    (p === 'openai' && openaiAvailable.value) ||
-    (p === 'ollama' && ollamaAvailable.value)
-  )
-
-  if (validProviders.length > 0) {
-    selectedProviders.value = validProviders
+// Toggle a provider on/off
+const toggleProvider = (provider) => {
+  const index = selectedProviders.value.indexOf(provider)
+  if (index > -1) {
+    selectedProviders.value.splice(index, 1)
   } else {
-    // Default: select all available providers
-    const providers = []
-    if (anthropicAvailable.value) providers.push('anthropic')
-    if (openaiAvailable.value) providers.push('openai')
-    if (ollamaAvailable.value) providers.push('ollama')
-    selectedProviders.value = providers
+    selectedProviders.value.push(provider)
+  }
+  localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(selectedProviders.value))
+}
+
+// Check Ollama availability and initialize providers on mount
+const checkOllamaAvailability = async () => {
+  try {
+    const response = await axios.get('/api/ollama/status')
+    ollamaAvailable.value = response.data.available === true
+    // If Ollama is available and no model is saved, save the first available model
+    if (ollamaAvailable.value && !hasOllamaModel.value && response.data.models?.length > 0) {
+      localStorage.setItem('ollama_model', response.data.models[0].name)
+    }
+  } catch (e) {
+    ollamaAvailable.value = false
   }
 
-  // Save selection
-  if (selectedProviders.value.length > 0) {
-    localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(selectedProviders.value))
+  // After checking availability, initialize/validate selected providers
+  initializeProviders()
+
+  // Filter out any providers that are no longer available
+  const validProviders = selectedProviders.value.filter(p => {
+    if (p === 'anthropic') return hasAnthropicKey.value
+    if (p === 'openai') return hasOpenAIKey.value
+    if (p === 'ollama') return ollamaAvailable.value
+    return false
+  })
+
+  // If no saved selection or all were invalid, default to all available
+  if (selectedProviders.value.length === 0 || validProviders.length === 0) {
+    const defaults = []
+    if (hasAnthropicKey.value) defaults.push('anthropic')
+    if (hasOpenAIKey.value) defaults.push('openai')
+    if (ollamaAvailable.value) defaults.push('ollama')
+    selectedProviders.value = defaults
+    localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(defaults))
+  } else {
+    selectedProviders.value = validProviders
+    localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(validProviders))
   }
 }
 
 onMounted(() => {
-  checkProviderAvailability()
+  checkOllamaAvailability()
 })
 
-// Initialize selected providers from localStorage (will be refined after availability check)
-const initializeProviders = () => {
-  // Try to load saved selection
-  const saved = localStorage.getItem(PROVIDER_SELECTION_KEY)
-  if (saved) {
-    try {
-      const savedProviders = JSON.parse(saved)
-      // Initially use saved providers that have keys/models configured
-      const validProviders = savedProviders.filter(p =>
-        (p === 'anthropic' && hasAnthropicKey.value) ||
-        (p === 'openai' && hasOpenAIKey.value) ||
-        (p === 'ollama' && hasOllamaModel.value)
-      )
-      if (validProviders.length > 0) {
-        selectedProviders.value = validProviders
-        return
-      }
-    } catch (e) {
-      console.error('Failed to load provider selection:', e)
-    }
-  }
-
-  // Default: select all providers that have keys/models configured
-  // (will be refined after actual availability check)
-  const providers = []
-  if (hasAnthropicKey.value) providers.push('anthropic')
-  if (hasOpenAIKey.value) providers.push('openai')
-  if (hasOllamaModel.value) providers.push('ollama')
-  selectedProviders.value = providers
-}
-initializeProviders()
-
-// Simple AI enable/disable toggle
-const useAI = ref(true) // Default to enabled if provider available
-
-// Load AI enabled state from localStorage
-const loadAIEnabledState = () => {
-  try {
-    const saved = localStorage.getItem('asymptote_use_ai')
-    if (saved !== null) {
-      useAI.value = saved === 'true'
-    }
-  } catch (e) {
-    console.error('Failed to load AI enabled state:', e)
-  }
-}
-loadAIEnabledState()
-
-// Save AI enabled state
-const saveAISetting = () => {
-  localStorage.setItem('asymptote_use_ai', useAI.value.toString())
-}
-
-// Get configured AI settings from Settings tab
+// Get configured AI settings from Settings tab (features only - rerank/synthesize)
 const getAISettings = () => {
   try {
     const saved = localStorage.getItem('ai_settings')
@@ -560,11 +449,15 @@ const getAISettings = () => {
   return { rerank: false, synthesize: false }
 }
 
-// Check if AI is configured and enabled
-const aiActive = computed(() => {
-  if (!hasAnyAvailableProvider.value || !useAI.value) return false
+// Check if AI features are enabled in Settings
+const aiFeaturesEnabled = computed(() => {
   const settings = getAISettings()
   return settings.rerank || settings.synthesize
+})
+
+// Check if AI will be used for this search (features enabled + providers selected)
+const aiActive = computed(() => {
+  return aiFeaturesEnabled.value && selectedProviders.value.length > 0
 })
 
 const activeFeaturesList = computed(() => {
@@ -572,7 +465,7 @@ const activeFeaturesList = computed(() => {
   const features = []
   if (settings.rerank) features.push('Reranking')
   if (settings.synthesize) features.push('Synthesis')
-  return features.length > 0 ? features.join(' + ') : 'No features enabled'
+  return features.length > 0 ? features.join(' + ') : 'None'
 })
 
 const cacheStats = computed(() => searchStore.getCacheStats())
@@ -583,31 +476,6 @@ const historyEntries = computed(() => {
     .filter(entry => entry && entry.query && entry.timestamp) // Filter out corrupted entries
     .sort((a, b) => b.timestamp - a.timestamp)
 })
-
-const toggleProvider = (provider) => {
-  const index = selectedProviders.value.indexOf(provider)
-  if (index > -1) {
-    // Remove if already selected (but keep at least one selected)
-    if (selectedProviders.value.length > 1) {
-      selectedProviders.value.splice(index, 1)
-    }
-  } else {
-    // Add if not selected
-    selectedProviders.value.push(provider)
-  }
-  // Save selection to localStorage
-  localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(selectedProviders.value))
-}
-
-const selectAllCloudProviders = () => {
-  const providers = []
-  if (hasAnthropicKey.value) providers.push('anthropic')
-  if (hasOpenAIKey.value) providers.push('openai')
-  selectedProviders.value = providers
-  // Save selection to localStorage
-  localStorage.setItem(PROVIDER_SELECTION_KEY, JSON.stringify(selectedProviders.value))
-}
-
 
 const getProviderDisplayName = (provider) => {
   const names = {
@@ -728,15 +596,11 @@ const executeSearch = async () => {
   error.value = ''
 
   try {
-    const aiSettingsRaw = localStorage.getItem('ai_settings')
-    const aiSettings = aiSettingsRaw ? JSON.parse(aiSettingsRaw) : {}
+    const aiSettings = getAISettings()
+    const useAI = aiActive.value
 
-    // Check if AI features are enabled AND the user has AI toggle enabled
-    const aiEnabled = useAI.value && (aiSettings.rerank || aiSettings.synthesize)
-
-    // If AI is enabled and we have multiple providers selected
-    if (aiEnabled && selectedProviders.value.length > 0) {
-      // Execute searches for each selected provider in parallel
+    if (useAI && selectedProviders.value.length > 0) {
+      // Execute search with each selected provider in parallel
       const searchPromises = selectedProviders.value.map(async (provider) => {
         const body = {
           query: searchStore.query,
@@ -749,16 +613,11 @@ const executeSearch = async () => {
         }
 
         let headers = {}
-
-        // Set headers based on provider type
         if (provider === 'ollama') {
-          const ollamaModel = localStorage.getItem('ollama_model') || 'llama3.2'
-          headers['X-Ollama-Model'] = ollamaModel
+          headers['X-Ollama-Model'] = localStorage.getItem('ollama_model') || 'llama3.2'
         } else {
-          // Cloud providers need API key
           const key = localStorage.getItem(`ai_api_key_${provider}`)
-          if (!key) return null
-          headers['X-AI-Key'] = key
+          if (key) headers['X-AI-Key'] = key
         }
 
         try {
@@ -772,43 +631,30 @@ const executeSearch = async () => {
           }
         } catch (err) {
           console.error(`Search with ${provider} failed:`, err)
-          return {
-            provider,
-            error: err.response?.data?.detail || `${provider} search failed`
-          }
+          return { provider, error: err.response?.data?.detail || `${provider} failed` }
         }
       })
 
       const providerResults = await Promise.all(searchPromises)
-      const validResults = providerResults.filter(r => r !== null)
+      const successfulResults = providerResults.filter(r => !r.error)
 
-      // Use results from the first successful search, or combine if multiple
-      const primaryResult = validResults.find(r => !r.error)
-      if (!primaryResult) {
-        throw new Error(validResults[0]?.error || 'All AI searches failed')
+      if (successfulResults.length === 0) {
+        throw new Error(providerResults[0]?.error || 'All AI searches failed')
       }
 
-      // Collect AI responses from all providers
-      const aiResponses = validResults
-        .filter(r => !r.error && (r.synthesis || r.aiUsage))
-        .map(r => ({
-          provider: r.provider,
-          synthesis: r.synthesis,
-          aiUsage: r.aiUsage
-        }))
+      // Use results from first successful provider, collect all AI responses
+      const aiResponses = successfulResults
+        .filter(r => r.synthesis || r.aiUsage)
+        .map(r => ({ provider: r.provider, synthesis: r.synthesis, aiUsage: r.aiUsage }))
 
       searchStore.setSearchResults({
         query: searchStore.query,
-        results: primaryResult.results,
-        aiResponses: aiResponses
+        results: successfulResults[0].results,
+        aiResponses
       })
     } else {
       // Regular search without AI
-      const body = {
-        query: searchStore.query,
-        top_k: searchStore.topK
-      }
-
+      const body = { query: searchStore.query, top_k: searchStore.topK }
       const collectionId = collectionStore.currentCollectionId
       const response = await axios.post(`/search?collection_id=${collectionId}`, body)
       searchStore.setSearchResults({

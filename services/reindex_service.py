@@ -126,7 +126,7 @@ class ReindexService:
             app_db.update_reindex_job(job_id, status="running")
 
             # Get list of documents
-            supported_extensions = {".pdf", ".txt", ".docx", ".csv"}
+            supported_extensions = {".pdf", ".txt", ".docx", ".csv", ".md", ".json"}
             documents = [
                 f for f in documents_dir.glob("*")
                 if f.is_file() and f.suffix.lower() in supported_extensions
@@ -339,7 +339,7 @@ class ReindexService:
             app_db.update_reindex_job(job_id, status="running")
 
             # Get list of documents
-            supported_extensions = {".pdf", ".txt", ".docx", ".csv"}
+            supported_extensions = {".pdf", ".txt", ".docx", ".csv", ".md", ".json"}
             documents = [
                 f for f in documents_dir.glob("*")
                 if f.is_file() and f.suffix.lower() in supported_extensions
