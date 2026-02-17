@@ -128,6 +128,16 @@ class IndexerManager:
             del self._indexers[collection_id]
             logger.info(f"Invalidated indexer for collection '{collection_id}'")
 
+    def remove_indexer(self, collection_id: str):
+        """Remove a cached indexer without saving (e.g., after collection deletion).
+
+        Args:
+            collection_id: Collection ID
+        """
+        if collection_id in self._indexers:
+            del self._indexers[collection_id]
+            logger.info(f"Removed indexer for deleted collection '{collection_id}'")
+
     def save_all(self):
         """Save all indexers to disk."""
         for collection_id, indexer in self._indexers.items():

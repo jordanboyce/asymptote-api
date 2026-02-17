@@ -6,43 +6,86 @@
         <div class="flex items-center justify-between py-4">
           <!-- Logo and Title -->
           <div class="flex items-center gap-3">
-            <img src="/icon_white.svg" alt="Asymptote" class="h-10 w-10">
+            <img src="/icon_black.svg" alt="Asymptote" class="logo-header h-10 w-10">
             <div>
               <h1 class="text-2xl font-bold">Asymptote</h1>
               <p class="text-xs text-primary-content/80">Semantic Document Search</p>
             </div>
           </div>
 
-          <!-- Stats -->
-          <div class="hidden lg:flex items-center gap-4">
-            <div class="text-center">
-              <div class="text-xl font-bold">{{ stats.documents }}</div>
-              <div class="text-xs text-primary-content/70">Documents</div>
+          <!-- Collection Selector + Stats -->
+          <div class="flex items-center gap-4">
+            <!-- Collection Selector -->
+            <div class="dropdown dropdown-end">
+              <label tabindex="0" class="btn btn-ghost gap-2 normal-case text-primary-content hover:bg-primary-content/20">
+                <div
+                  class="w-3 h-3 rounded-full"
+                  :style="{ backgroundColor: collectionStore.currentCollection?.color || '#3b82f6' }"
+                ></div>
+                <span class="max-w-32 truncate">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
+                <ChevronDown :size="16" />
+              </label>
+              <ul tabindex="0" class="dropdown-content z-[100] menu p-2 shadow-lg bg-base-100 rounded-box w-64 text-base-content">
+                <li class="menu-title">
+                  <span>Collections</span>
+                </li>
+                <li v-for="collection in collectionStore.sortedCollections" :key="collection.id">
+                  <a
+                    @click="selectCollection(collection.id)"
+                    :class="{ 'active': collection.id === collectionStore.currentCollectionId }"
+                    class="group"
+                  >
+                    <div
+                      class="w-3 h-3 rounded-full flex-shrink-0"
+                      :style="{ backgroundColor: collection.color }"
+                    ></div>
+                    <span class="flex-1 truncate">{{ collection.name }}</span>
+                    <span class="badge badge-sm badge-ghost">{{ collection.document_count || 0 }}</span>
+                    <button
+                      @click.stop="openEditCollectionModal(collection)"
+                      class="btn btn-ghost btn-xs opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                      title="Edit collection"
+                    >
+                      <Pencil :size="14" />
+                    </button>
+                  </a>
+                </li>
+                <div class="divider my-1"></div>
+                <li>
+                  <a @click="openCreateCollectionModal" class="text-primary">
+                    <Plus :size="16" />
+                    New Collection
+                  </a>
+                </li>
+              </ul>
             </div>
-            <div class="divider divider-horizontal mx-0"></div>
-            <div class="text-center">
-              <div class="text-xl font-bold">{{ stats.pages }}</div>
-              <div class="text-xs text-primary-content/70">Pages</div>
-            </div>
-            <div class="divider divider-horizontal mx-0"></div>
-            <div class="text-center">
-              <div class="text-xl font-bold">{{ stats.chunks }}</div>
-              <div class="text-xs text-primary-content/70">Chunks</div>
+
+            <div class="divider divider-horizontal mx-0 hidden lg:flex"></div>
+
+            <!-- Stats -->
+            <div class="hidden lg:flex items-center gap-4">
+              <div class="text-center">
+                <div class="text-xl font-bold">{{ stats.documents }}</div>
+                <div class="text-xs text-primary-content/70">Documents</div>
+              </div>
+              <div class="divider divider-horizontal mx-0"></div>
+              <div class="text-center">
+                <div class="text-xl font-bold">{{ stats.pages }}</div>
+                <div class="text-xs text-primary-content/70">Pages</div>
+              </div>
+              <div class="divider divider-horizontal mx-0"></div>
+              <div class="text-center">
+                <div class="text-xl font-bold">{{ stats.chunks }}</div>
+                <div class="text-xs text-primary-content/70">Chunks</div>
+              </div>
             </div>
           </div>
-
-          <!-- Theme Toggle -->
-          <label class="swap swap-rotate btn btn-ghost btn-circle">
-            <input type="checkbox" @change="toggleTheme" :checked="isDark" />
-            <Sun :size="24" class="swap-on" />
-            <Moon :size="24" class="swap-off" />
-          </label>
         </div>
       </div>
     </header>
 
     <!-- Tabs Navigation (Sticky) -->
-    <div class="sticky top-[88px] z-40 bg-base-100 border-b border-base-300 shadow-md">
+    <div class="sticky top-[80px] z-40 bg-base-100 border-b border-base-300 shadow-md">
       <div class="container mx-auto px-4">
         <div role="tablist" class="tabs tabs-boxed bg-transparent gap-2 py-3 flex justify-between items-center">
           <a
@@ -69,66 +112,19 @@
             <FileText :size="20" class="mr-2" />
             Documents
           </a>
-          <a
-            role="tab"
-            class="tab tab-lg font-semibold transition-all"
-            :class="{
-              'tab-active bg-primary text-primary-content': activeTab === 'settings',
-              'hover:bg-base-200': activeTab !== 'settings'
-            }"
-            @click="activeTab = 'settings'"
-          >
-            <Settings :size="20" class="mr-2" />
-            Settings
-          </a>
 
           <!-- Spacer -->
           <div class="flex-1"></div>
 
-          <!-- Collection Selector -->
-          <div class="dropdown dropdown-end">
-            <label tabindex="0" class="btn btn-ghost gap-2 normal-case">
-              <div
-                class="w-3 h-3 rounded-full"
-                :style="{ backgroundColor: collectionStore.currentCollection?.color || '#3b82f6' }"
-              ></div>
-              <span class="max-w-32 truncate">{{ collectionStore.currentCollection?.name || 'Default' }}</span>
-              <ChevronDown :size="16" />
-            </label>
-            <ul tabindex="0" class="dropdown-content z-[100] menu p-2 shadow-lg bg-base-100 rounded-box w-64 text-base-content">
-              <li class="menu-title">
-                <span>Collections</span>
-              </li>
-              <li v-for="collection in collectionStore.sortedCollections" :key="collection.id">
-                <a
-                  @click="selectCollection(collection.id)"
-                  :class="{ 'active': collection.id === collectionStore.currentCollectionId }"
-                  class="group"
-                >
-                  <div
-                    class="w-3 h-3 rounded-full flex-shrink-0"
-                    :style="{ backgroundColor: collection.color }"
-                  ></div>
-                  <span class="flex-1 truncate">{{ collection.name }}</span>
-                  <span class="badge badge-sm badge-ghost">{{ collection.document_count || 0 }}</span>
-                  <button
-                    @click.stop="openEditCollectionModal(collection)"
-                    class="btn btn-ghost btn-xs opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                    title="Edit collection"
-                  >
-                    <Pencil :size="14" />
-                  </button>
-                </a>
-              </li>
-              <div class="divider my-1"></div>
-              <li>
-                <a @click="openCreateCollectionModal" class="text-primary">
-                  <Plus :size="16" />
-                  New Collection
-                </a>
-              </li>
-            </ul>
-          </div>
+          <!-- Settings Button -->
+          <button
+            class="btn btn-ghost btn-circle"
+            :class="{ 'bg-primary text-primary-content': activeTab === 'settings' }"
+            @click="activeTab = 'settings'"
+            title="Settings"
+          >
+            <Settings :size="20" />
+          </button>
         </div>
       </div>
     </div>
@@ -312,10 +308,32 @@
       <div class="modal-box">
         <h3 class="font-bold text-lg text-error mb-4">Delete Collection</h3>
         <p class="mb-2">Are you sure you want to delete <strong>{{ editCollectionName }}</strong>?</p>
-        <p class="text-warning mb-4">This will permanently delete all documents and indexes in this collection. This action cannot be undone.</p>
+
+        <div class="alert alert-warning my-4">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div>
+            <div class="font-bold">This will permanently delete:</div>
+            <ul class="list-disc list-inside text-sm mt-1">
+              <li>All uploaded documents and files</li>
+              <li>All vector indexes and embeddings</li>
+              <li>All search history for this collection</li>
+            </ul>
+            <div class="text-sm font-semibold mt-2">This action cannot be undone.</div>
+          </div>
+        </div>
+
+        <!-- Error display -->
+        <div v-if="deleteError" class="alert alert-error mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>{{ deleteError }}</span>
+        </div>
 
         <div class="modal-action">
-          <button class="btn btn-ghost" @click="showDeleteConfirmModal = false" :disabled="deletingCollection">
+          <button class="btn btn-ghost" @click="closeDeleteModal" :disabled="deletingCollection">
             Cancel
           </button>
           <button
@@ -329,7 +347,7 @@
         </div>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button @click="showDeleteConfirmModal = false">close</button>
+        <button @click="closeDeleteModal">close</button>
       </form>
     </dialog>
   </div>
@@ -338,16 +356,19 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import axios from 'axios'
-import { Search, FileText, Settings, Sun, Moon, FolderOpen, Plus, ChevronDown, Pencil, Trash2 } from 'lucide-vue-next'
+import { Search, FileText, Settings, Plus, ChevronDown, Pencil, Trash2 } from 'lucide-vue-next'
 import SearchTab from './components/SearchTab.vue'
 import DocumentsTab from './components/DocumentsTab.vue'
 import SettingsTab from './components/SettingsTab.vue'
 import { useCollectionStore } from './stores/collectionStore'
+import { useSearchStore } from './stores/searchStore'
 
 const collectionStore = useCollectionStore()
+const searchStore = useSearchStore()
 
 const activeTab = ref('search')
-const isDark = ref(false)
+const currentTheme = ref('light')
+
 const stats = ref({
   documents: 0,
   pages: 0,
@@ -372,11 +393,18 @@ const updatingCollection = ref(false)
 // Delete confirmation modal state
 const showDeleteConfirmModal = ref(false)
 const deletingCollection = ref(false)
+const deleteError = ref('')
 
-const toggleTheme = () => {
-  isDark.value = !isDark.value
-  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light')
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
+const updateThemeFromStorage = () => {
+  const savedTheme = localStorage.getItem('theme')
+  if (savedTheme) {
+    currentTheme.value = savedTheme
+    document.documentElement.setAttribute('data-theme', savedTheme)
+  } else {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    currentTheme.value = prefersDark ? 'dark' : 'light'
+    document.documentElement.setAttribute('data-theme', currentTheme.value)
+  }
 }
 
 const loadStats = async () => {
@@ -395,12 +423,20 @@ const loadStats = async () => {
   }
 }
 
-const handleDocumentDeleted = () => {
-  loadStats()
+const handleDocumentDeleted = async () => {
+  // Reload both stats and collections list (for document_count in dropdown)
+  await Promise.all([
+    loadStats(),
+    collectionStore.loadCollections()
+  ])
 }
 
-const handleDataCleared = () => {
-  loadStats()
+const handleDataCleared = async () => {
+  // Reload both stats and collections list (for document_count in dropdown)
+  await Promise.all([
+    loadStats(),
+    collectionStore.loadCollections()
+  ])
 }
 
 const switchTab = (tabName) => {
@@ -464,21 +500,43 @@ const updateCollection = async () => {
 }
 
 const confirmDeleteCollection = () => {
+  deleteError.value = ''
   showDeleteConfirmModal.value = true
+}
+
+const closeDeleteModal = () => {
+  if (!deletingCollection.value) {
+    showDeleteConfirmModal.value = false
+    deleteError.value = ''
+  }
 }
 
 const deleteCollection = async () => {
   deletingCollection.value = true
+  deleteError.value = ''
   try {
-    await collectionStore.deleteCollection(editingCollectionId.value)
+    const deletedCollectionId = editingCollectionId.value
+    const wasCurrentCollection = collectionStore.currentCollectionId === deletedCollectionId
+
+    await collectionStore.deleteCollection(deletedCollectionId)
+    // Clear search history for the deleted collection
+    searchStore.clearCollectionCache(deletedCollectionId)
+
+    // Close modals
     showDeleteConfirmModal.value = false
     showEditModal.value = false
+    deleteError.value = ''
+
     // Switch to default collection if we deleted the current one
-    if (collectionStore.currentCollectionId === editingCollectionId.value) {
+    if (wasCurrentCollection) {
       collectionStore.setCurrentCollection('default')
     }
+
+    // Reload stats for the new current collection
+    await loadStats()
   } catch (err) {
     console.error('Failed to delete collection:', err)
+    deleteError.value = err.response?.data?.detail || err.message || 'Failed to delete collection. Please try again.'
   } finally {
     deletingCollection.value = false
   }
@@ -496,24 +554,25 @@ onMounted(async () => {
   // Then load stats for current collection
   loadStats()
 
-  // Initialize theme: check localStorage first, then system preference
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme) {
-    // User has explicitly set a preference
-    isDark.value = savedTheme === 'dark'
-    document.documentElement.setAttribute('data-theme', savedTheme)
-  } else {
-    // No saved preference - use system theme
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    isDark.value = prefersDark
-    document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
-  }
+  // Initialize theme
+  updateThemeFromStorage()
+
+  // Listen for theme changes (from Settings tab via custom event)
+  window.addEventListener('theme-changed', () => {
+    updateThemeFromStorage()
+  })
+
+  // Listen for storage changes (theme changed in another tab)
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'theme') {
+      updateThemeFromStorage()
+    }
+  })
 
   // Listen for system theme changes (only if user hasn't set a preference)
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (!localStorage.getItem('theme')) {
-      isDark.value = e.matches
-      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light')
+      updateThemeFromStorage()
     }
   })
 })

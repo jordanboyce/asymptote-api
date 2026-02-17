@@ -1,5 +1,6 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
+import { useCollectionStore } from './collectionStore'
 
 export const useSearchStore = defineStore('search', () => {
   // Search state
@@ -14,11 +15,11 @@ export const useSearchStore = defineStore('search', () => {
   // Support for multiple AI providers
   const aiResponses = ref([])  // Array of {provider, synthesis, aiUsage}
 
-  // Search cache
-  const CACHE_KEY = 'asymptote_search_cache'
+  // Search cache - now collection-aware
+  const CACHE_KEY = 'asymptote_search_cache_v2'  // New key to avoid conflicts with old cache
   const MAX_CACHE_SIZE = 20
   const cacheCount = ref(0) // Reactive cache count for UI updates
-  const cache = ref({}) // Reactive cache data for UI updates
+  const cache = ref({}) // Reactive cache data for UI updates - keyed by collection_id
 
   // Actions
   function setSearchResults(data) {
@@ -45,12 +46,28 @@ export const useSearchStore = defineStore('search', () => {
     }
   }
 
+  // Get current collection ID
+  function getCurrentCollectionId() {
+    const collectionStore = useCollectionStore()
+    return collectionStore.currentCollectionId || 'default'
+  }
+
   function getCacheKey(query, topK) {
     return `${query.toLowerCase().trim()}|${topK}`
   }
 
+  // Get collection-specific cache
+  function getCollectionCache(collectionId = null) {
+    const cid = collectionId || getCurrentCollectionId()
+    if (!cache.value[cid]) {
+      cache.value[cid] = {}
+    }
+    return cache.value[cid]
+  }
+
   function cacheSearchResult(data) {
     try {
+      const collectionId = getCurrentCollectionId()
       const cacheKey = getCacheKey(data.query, topK.value)
 
       // Normalize query to lowercase for consistency
@@ -64,18 +81,24 @@ export const useSearchStore = defineStore('search', () => {
         aiResponses: data.aiResponses || [],
         synthesis: data.synthesis,
         ai_usage: data.ai_usage,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        collectionId: collectionId
       }
 
-      // Add to cache (or update if exists)
-      cache.value[cacheKey] = entry
+      // Ensure collection cache exists
+      if (!cache.value[collectionId]) {
+        cache.value[collectionId] = {}
+      }
 
-      // Keep only the most recent MAX_CACHE_SIZE entries
-      const entries = Object.entries(cache.value)
+      // Add to collection-specific cache
+      cache.value[collectionId][cacheKey] = entry
+
+      // Keep only the most recent MAX_CACHE_SIZE entries per collection
+      const entries = Object.entries(cache.value[collectionId])
         .sort((a, b) => b[1].timestamp - a[1].timestamp)
         .slice(0, MAX_CACHE_SIZE)
 
-      cache.value = Object.fromEntries(entries)
+      cache.value[collectionId] = Object.fromEntries(entries)
       localStorage.setItem(CACHE_KEY, JSON.stringify(cache.value))
 
       // Sync cache count
@@ -86,37 +109,54 @@ export const useSearchStore = defineStore('search', () => {
   }
 
   function getSearchCache() {
-    // Return the reactive cache ref value
-    return cache.value
+    // Return cache for current collection
+    return getCollectionCache()
   }
 
   function getCachedResult(query, topKValue) {
+    const collectionCache = getCollectionCache()
     const cacheKey = getCacheKey(query, topKValue)
-    return cache.value[cacheKey] || null
+    return collectionCache[cacheKey] || null
   }
 
   function clearSearchCache() {
-    cache.value = {}
-    localStorage.removeItem(CACHE_KEY)
+    // Clear only current collection's cache
+    const collectionId = getCurrentCollectionId()
+    delete cache.value[collectionId]
+    cache.value = { ...cache.value }
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cache.value))
     syncCacheCount()
   }
 
+  function clearCollectionCache(collectionId) {
+    // Clear a specific collection's cache (called when collection is deleted)
+    if (cache.value[collectionId]) {
+      delete cache.value[collectionId]
+      cache.value = { ...cache.value }
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache.value))
+      syncCacheCount()
+    }
+  }
+
   function deleteCacheEntry(query, topKValue) {
+    const collectionId = getCurrentCollectionId()
+    const collectionCache = getCollectionCache()
     const cacheKey = getCacheKey(query, topKValue)
-    delete cache.value[cacheKey]
-    // Trigger reactivity by creating a new object
+    delete collectionCache[cacheKey]
+    // Trigger reactivity
+    cache.value[collectionId] = { ...collectionCache }
     cache.value = { ...cache.value }
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache.value))
     syncCacheCount()
   }
 
   function getCacheStats() {
-    const entries = Object.values(cache.value)
-    // Always compute count from actual cache to ensure accuracy
+    const collectionCache = getCollectionCache()
+    const entries = Object.values(collectionCache)
     const actualCount = entries.length
     return {
       count: actualCount,
-      totalSize: JSON.stringify(cache.value).length,
+      totalSize: JSON.stringify(collectionCache).length,
       oldest: entries.length > 0 ? Math.min(...entries.map(e => e.timestamp)) : null,
       newest: entries.length > 0 ? Math.max(...entries.map(e => e.timestamp)) : null
     }
@@ -134,22 +174,30 @@ export const useSearchStore = defineStore('search', () => {
 
       const loadedCache = JSON.parse(cached)
 
-      // Validate and clean cache entries
-      const validCache = {}
-      for (const [key, entry] of Object.entries(loadedCache)) {
-        // Only keep entries with required fields
-        if (entry && entry.query && entry.timestamp && entry.topK) {
-          validCache[key] = entry
+      // Handle migration from old flat cache to new collection-aware cache
+      // Old format: { "query|topK": entry }
+      // New format: { "collectionId": { "query|topK": entry } }
+
+      // Check if this is old format (entries have query/timestamp directly)
+      const firstKey = Object.keys(loadedCache)[0]
+      const firstValue = loadedCache[firstKey]
+      if (firstValue && firstValue.query && firstValue.timestamp) {
+        // Old format - migrate to new format under 'default' collection
+        console.log('Migrating search cache to collection-aware format')
+        const migratedCache = { default: {} }
+        for (const [key, entry] of Object.entries(loadedCache)) {
+          if (entry && entry.query && entry.timestamp && entry.topK) {
+            migratedCache.default[key] = { ...entry, collectionId: 'default' }
+          }
         }
+        cache.value = migratedCache
+        localStorage.setItem(CACHE_KEY, JSON.stringify(migratedCache))
+      } else {
+        // New format - just load it
+        cache.value = loadedCache
       }
 
-      cache.value = validCache
-      cacheCount.value = Object.keys(validCache).length
-
-      // If we cleaned anything, save the cleaned cache
-      if (Object.keys(validCache).length !== Object.keys(loadedCache).length) {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(validCache))
-      }
+      syncCacheCount()
     } catch (error) {
       console.error('Failed to load search cache:', error)
       cache.value = {}
@@ -157,9 +205,10 @@ export const useSearchStore = defineStore('search', () => {
     }
   }
 
-  // Sync cache count from actual cache
+  // Sync cache count from actual cache (for current collection)
   function syncCacheCount() {
-    cacheCount.value = Object.keys(cache.value).length
+    const collectionCache = getCollectionCache()
+    cacheCount.value = Object.keys(collectionCache).length
   }
 
   initializeCache()
@@ -200,6 +249,7 @@ export const useSearchStore = defineStore('search', () => {
     getCachedResult,
     getSearchCache,
     clearSearchCache,
+    clearCollectionCache,
     deleteCacheEntry,
     getCacheStats,
     syncCacheCount

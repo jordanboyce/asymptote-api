@@ -163,8 +163,17 @@ class CollectionService:
         # Delete directory and all contents
         collection_dir = self._get_collection_dir(collection_id)
         if collection_dir.exists():
-            shutil.rmtree(collection_dir)
-            logger.info(f"Deleted collection directory: {collection_dir}")
+            try:
+                shutil.rmtree(collection_dir)
+                logger.info(f"Deleted collection directory: {collection_dir}")
+            except PermissionError as e:
+                # On Windows, files may be locked by other processes
+                logger.warning(f"Could not delete collection directory (files may be locked): {e}")
+                # Still return True since the database entry was deleted
+                # The directory can be cleaned up manually or on restart
+            except Exception as e:
+                logger.error(f"Error deleting collection directory: {e}")
+                # Still return True since the database entry was deleted
 
         return True
 

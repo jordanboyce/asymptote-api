@@ -274,6 +274,41 @@
       <span>No results found. Try a different query or upload more documents.</span>
     </div>
 
+    <!-- Welcome State (shown when no search has been performed yet) -->
+    <div v-else-if="!searchStore.searched && !loading" class="flex justify-center py-8">
+      <!-- Large 3D Card with all content inside -->
+      <div class="hover-3d hover-3d-logo">
+        <figure class="w-full max-w-xl rounded-3xl bg-gradient-to-br from-primary/10 to-secondary/10 border border-base-300 shadow-xl p-8 flex flex-col items-center justify-center">
+          <!-- Logo (switches based on theme - black for light themes, white for dark themes) -->
+          <img src="/icon_black.svg" alt="Asymptote" class="logo-light h-32 opacity-80 mb-6" style="filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.1));">
+          <img src="/icon_white.svg" alt="Asymptote" class="logo-dark h-32 opacity-80 mb-6" style="filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));">
+
+          <!-- Title and Description -->
+          <h3 class="text-2xl font-bold text-base-content/80 mb-2">Ready to Search</h3>
+          <p class="text-base-content/60 text-center max-w-md mb-6">
+            Enter a query above to semantically search through your documents.
+            Results are ranked by meaning, not just keywords.
+          </p>
+
+          <!-- Feature Badges -->
+          <div class="flex flex-wrap justify-center gap-2 text-xs">
+            <span class="badge badge-primary badge-outline">Semantic Search</span>
+            <span class="badge badge-secondary badge-outline">AI-Powered</span>
+            <span class="badge badge-accent badge-outline">Multi-Format Support</span>
+          </div>
+        </figure>
+        <!-- 8 empty divs needed for the 3D effect -->
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+        <div></div>
+      </div>
+    </div>
+
     <!-- Search History Modal -->
     <dialog ref="historyModal" class="modal" :class="{ 'modal-open': showHistoryModal }">
       <div class="modal-box max-w-3xl">

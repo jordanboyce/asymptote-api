@@ -1000,14 +1000,26 @@ async def delete_collection(collection_id: str):
             detail="Cannot delete the default collection"
         )
 
-    success = collection_service.delete_collection(collection_id)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Collection '{collection_id}' not found"
-        )
+    try:
+        # Remove cached indexer first (before files are deleted)
+        indexer_manager.remove_indexer(collection_id)
 
-    return {"message": f"Collection '{collection_id}' deleted", "success": True}
+        success = collection_service.delete_collection(collection_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Collection '{collection_id}' not found"
+            )
+
+        return {"message": f"Collection '{collection_id}' deleted", "success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete collection '{collection_id}': {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete collection: {str(e)}"
+        )
 
 
 @app.get(
