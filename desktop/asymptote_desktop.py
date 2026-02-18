@@ -16,6 +16,15 @@ from pathlib import Path
 if getattr(sys, 'frozen', False):
     # Running as compiled executable
     application_path = sys._MEIPASS
+
+    # Fix SSL certificates for HuggingFace model downloads
+    # When running as a frozen exe, we need to point to the bundled certificates
+    cert_path = os.path.join(application_path, 'certifi', 'cacert.pem')
+    if os.path.exists(cert_path):
+        os.environ['SSL_CERT_FILE'] = cert_path
+        os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+        # Also set for urllib3/httpx
+        os.environ['CURL_CA_BUNDLE'] = cert_path
 else:
     # Running as script
     application_path = Path(__file__).parent.parent

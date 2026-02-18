@@ -15,7 +15,6 @@ from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
-from services.vector_store_v2 import VectorStoreV2
 from models.schemas import ChunkMetadata
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,6 @@ class ReindexService:
         embedding_model: str,
         chunk_size: int,
         chunk_overlap: int,
-        metadata_storage: str,
         embedding_dim: int = 384,
     ) -> int:
         """Start a re-indexing job for a specific collection.
@@ -50,7 +48,6 @@ class ReindexService:
             embedding_model: Embedding model to use
             chunk_size: Chunk size for text splitting
             chunk_overlap: Overlap between chunks
-            metadata_storage: Storage type (json or sqlite)
             embedding_dim: Embedding dimensions
 
         Returns:
@@ -72,7 +69,6 @@ class ReindexService:
             "embedding_model": embedding_model,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
-            "metadata_storage": metadata_storage,
         }
 
         job_id = app_db.create_reindex_job(config_snapshot)
@@ -86,7 +82,6 @@ class ReindexService:
             embedding_model=embedding_model,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            metadata_storage=metadata_storage,
             embedding_dim=embedding_dim,
         ))
 
@@ -101,7 +96,6 @@ class ReindexService:
         embedding_model: str,
         chunk_size: int,
         chunk_overlap: int,
-        metadata_storage: str,
         embedding_dim: int,
     ):
         """Run the re-indexing process for a collection in background.
@@ -114,7 +108,6 @@ class ReindexService:
             embedding_model: Model name
             chunk_size: Characters per chunk
             chunk_overlap: Overlap size
-            metadata_storage: json or sqlite
             embedding_dim: Embedding dimensions
         """
         try:
@@ -152,16 +145,10 @@ class ReindexService:
             document_extractor = DocumentExtractor()
 
             # Create new vector store in collection's indexes directory
-            if metadata_storage.lower() == "sqlite":
-                vector_store = VectorStoreV2(
-                    index_dir=indexes_dir,
-                    embedding_dim=embedding_service.embedding_dim
-                )
-            else:
-                vector_store = VectorStore(
-                    index_dir=indexes_dir,
-                    embedding_dim=embedding_service.embedding_dim
-                )
+            vector_store = VectorStore(
+                index_dir=indexes_dir,
+                embedding_dim=embedding_service.embedding_dim
+            )
 
             # Clear existing index
             logger.info(f"Clearing existing index for collection {collection_id} (job {job_id})")
@@ -261,7 +248,6 @@ class ReindexService:
         embedding_model: str,
         chunk_size: int,
         chunk_overlap: int,
-        metadata_storage: str,
         embedding_dim: int = 384,
     ) -> int:
         """Start a re-indexing job.
@@ -271,7 +257,6 @@ class ReindexService:
             embedding_model: Embedding model to use
             chunk_size: Chunk size for text splitting
             chunk_overlap: Overlap between chunks
-            metadata_storage: Storage type (json or sqlite)
             embedding_dim: Embedding dimensions
 
         Returns:
@@ -292,7 +277,6 @@ class ReindexService:
             "embedding_model": embedding_model,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
-            "metadata_storage": metadata_storage,
         }
 
         job_id = app_db.create_reindex_job(config_snapshot)
@@ -304,7 +288,6 @@ class ReindexService:
             embedding_model=embedding_model,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            metadata_storage=metadata_storage,
             embedding_dim=embedding_dim,
         ))
 
@@ -317,7 +300,6 @@ class ReindexService:
         embedding_model: str,
         chunk_size: int,
         chunk_overlap: int,
-        metadata_storage: str,
         embedding_dim: int,
     ):
         """Run the re-indexing process in background.
@@ -328,7 +310,6 @@ class ReindexService:
             embedding_model: Model name
             chunk_size: Characters per chunk
             chunk_overlap: Overlap size
-            metadata_storage: json or sqlite
             embedding_dim: Embedding dimensions
         """
         try:
@@ -366,16 +347,10 @@ class ReindexService:
 
             # Create new vector store
             indexes_dir = documents_dir.parent / "indexes"
-            if metadata_storage.lower() == "sqlite":
-                vector_store = VectorStoreV2(
-                    index_dir=indexes_dir,
-                    embedding_dim=embedding_service.embedding_dim
-                )
-            else:
-                vector_store = VectorStore(
-                    index_dir=indexes_dir,
-                    embedding_dim=embedding_service.embedding_dim
-                )
+            vector_store = VectorStore(
+                index_dir=indexes_dir,
+                embedding_dim=embedding_service.embedding_dim
+            )
 
             # Clear existing index
             logger.info(f"Clearing existing index for re-indexing job {job_id}")

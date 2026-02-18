@@ -16,6 +16,33 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _get_document_count_from_metadata(collection_id: str, data_dir: Path = Path("data")) -> int:
+    """Get the actual document count from the collection's metadata.db.
+
+    This is the source of truth for document counts, avoiding sync issues
+    between app.db and the actual indexed data.
+
+    Args:
+        collection_id: Collection ID
+        data_dir: Base data directory
+
+    Returns:
+        Number of unique documents in the collection's index
+    """
+    metadata_db_path = data_dir / "collections" / collection_id / "indexes" / "metadata.db"
+
+    if not metadata_db_path.exists():
+        return 0
+
+    try:
+        with sqlite3.connect(metadata_db_path) as conn:
+            cursor = conn.execute("SELECT COUNT(DISTINCT document_id) FROM chunks")
+            return cursor.fetchone()[0]
+    except Exception as e:
+        logger.warning(f"Could not read metadata.db for collection {collection_id}: {e}")
+        return 0
+
+
 class AppDatabase:
     """Manages application-level persistent data in SQLite."""
 
@@ -698,12 +725,8 @@ class AppDatabase:
             row = cursor.fetchone()
             if row:
                 collection = dict(row)
-                # Get document count
-                count_cursor = conn.execute(
-                    "SELECT COUNT(*) FROM collection_documents WHERE collection_id = ?",
-                    (collection_id,)
-                )
-                collection['document_count'] = count_cursor.fetchone()[0]
+                # Get document count from actual metadata.db (source of truth)
+                collection['document_count'] = _get_document_count_from_metadata(collection_id)
                 return collection
             return None
 
@@ -716,15 +739,15 @@ class AppDatabase:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                """
-                SELECT c.*, COUNT(cd.document_id) as document_count
-                FROM collections c
-                LEFT JOIN collection_documents cd ON c.id = cd.collection_id
-                GROUP BY c.id
-                ORDER BY c.created_at ASC
-                """
+                "SELECT * FROM collections ORDER BY created_at ASC"
             )
-            return [dict(row) for row in cursor.fetchall()]
+            collections = []
+            for row in cursor.fetchall():
+                collection = dict(row)
+                # Get document count from actual metadata.db (source of truth)
+                collection['document_count'] = _get_document_count_from_metadata(collection['id'])
+                collections.append(collection)
+            return collections
 
     def update_collection(
         self,

@@ -250,15 +250,28 @@
                 <svg v-else-if="result.source_format === 'md'" class="w-5 h-5 text-info" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"/>
                 </svg>
+                <!-- Code file icon -->
+                <svg v-else-if="isCodeFile(result.filename)" class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                </svg>
                 <svg v-else class="w-5 h-5 text-base-content/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
                 {{ result.filename }}
               </h4>
               <div class="flex flex-wrap gap-1 mt-1">
-                <!-- Page/Row indicator -->
+                <!-- Page/Row/Line indicator -->
                 <div v-if="result.source_format === 'csv' && result.csv_row_number" class="badge badge-success badge-sm">
                   Row {{ result.csv_row_number }}
+                </div>
+                <div v-else-if="isCodeFile(result.filename) && result.line_start" class="badge badge-primary badge-sm">
+                  Lines {{ result.line_start }}<span v-if="result.line_end && result.line_end !== result.line_start">-{{ result.line_end }}</span>
+                </div>
+                <div v-else-if="isCodeFile(result.filename) && result.symbol_name" class="badge badge-primary badge-sm">
+                  {{ result.symbol_type || 'Symbol' }}: {{ result.symbol_name }}
+                </div>
+                <div v-else-if="isCodeFile(result.filename)" class="badge badge-primary badge-sm">
+                  Section {{ result.page_number }}
                 </div>
                 <div v-else class="badge badge-primary badge-sm">
                   Page {{ result.page_number }}
@@ -306,7 +319,9 @@
           <p v-else class="text-sm mt-2" v-html="highlightText(result.text_snippet, searchStore.query)"></p>
 
           <div class="card-actions justify-end mt-4">
+            <!-- Open Page button - only for PDFs (page_url uses #page=N which only works in PDF viewers) -->
             <a
+              v-if="result.source_format === 'pdf'"
               :href="result.page_url"
               target="_blank"
               class="btn btn-sm btn-primary"
@@ -314,12 +329,26 @@
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
               </svg>
-              {{ result.source_format === 'csv' ? 'Open Row' : 'Open Page' }} {{ result.source_format === 'csv' ? result.csv_row_number : result.page_number }}
+              Open Page {{ result.page_number }}
+            </a>
+            <!-- View button - for non-PDF files (no page anchor support) -->
+            <a
+              v-else
+              :href="result.pdf_url"
+              target="_blank"
+              class="btn btn-sm btn-primary"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+              View File
             </a>
             <a
               :href="result.pdf_url"
               target="_blank"
               class="btn btn-sm btn-ghost"
+              :download="result.filename"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
@@ -589,6 +618,15 @@ const getProviderDisplayName = (provider) => {
     'ollama': 'Ollama'
   }
   return names[provider] || provider
+}
+
+// Code file extensions for display logic
+const CODE_EXTENSIONS = ['.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm', '.mod', '.def', '.mi', '.asm', '.s']
+
+const isCodeFile = (filename) => {
+  if (!filename) return false
+  const ext = '.' + filename.split('.').pop().toLowerCase()
+  return CODE_EXTENSIONS.includes(ext)
 }
 
 const escapeRegExp = (str) => {

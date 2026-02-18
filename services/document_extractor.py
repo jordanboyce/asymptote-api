@@ -1,13 +1,19 @@
 """Generic document text extraction service supporting multiple file formats."""
 
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Union
 import logging
 import io
 
 # PDF extraction
 import pdfplumber
 from pypdf import PdfReader
+
+# Code extraction
+from services.code_extractor import (
+    CodeExtractor, CodeChunk, CodeLanguage,
+    SUPPORTED_CODE_EXTENSIONS, is_code_file
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +79,9 @@ class ExtractionResult:
 
 
 class DocumentExtractor:
-    """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON)."""
+    """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON) and code files."""
 
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
 
     def __init__(self, enable_ocr: bool = False, ocr_engine: str = "pytesseract",
                  ocr_language: str = "eng", ocr_fallback_only: bool = True):
@@ -93,6 +99,7 @@ class DocumentExtractor:
         self.ocr_language = ocr_language
         self.ocr_fallback_only = ocr_fallback_only
         self._easyocr_reader = None
+        self._code_extractor = CodeExtractor()
 
         if enable_ocr:
             self._validate_ocr_setup()
@@ -167,6 +174,8 @@ class DocumentExtractor:
             return ExtractionResult(self._extract_markdown(file_path), method="text")
         elif file_ext == '.json':
             return ExtractionResult(self._extract_json(file_path), method="text")
+        elif is_code_file(str(file_path)):
+            return self._extract_code(file_path)
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
 
@@ -625,3 +634,74 @@ class DocumentExtractor:
         except Exception as e:
             logger.error(f"Failed to get page count for {file_path.name}: {e}")
             return 0
+
+    def _extract_code(self, code_path: Path) -> ExtractionResult:
+        """
+        Extract text from code files (Pascal/Delphi/Modula-2/Assembly).
+
+        For code files, we return sections based on major code blocks
+        (unit header, interface section, implementation section, etc.)
+        This is for backward compatibility with the page-based extraction model.
+
+        For symbol-aware extraction, use extract_code_chunks() instead.
+
+        Returns:
+            ExtractionResult with code sections
+        """
+        content, language, unit_name = self._code_extractor.extract_file(str(code_path))
+
+        # Split code into logical sections for basic page-based indexing
+        page_texts = {}
+        lines = content.split('\n')
+
+        # For now, use ~100 lines per "page" for code
+        lines_per_page = 100
+        for start_idx in range(0, len(lines), lines_per_page):
+            page_num = (start_idx // lines_per_page) + 1
+            end_idx = min(start_idx + lines_per_page, len(lines))
+            page_texts[page_num] = '\n'.join(lines[start_idx:end_idx])
+
+        return ExtractionResult(page_texts, method="text")
+
+    def extract_code_chunks(
+        self,
+        file_path: Path,
+        document_id: str,
+    ) -> List[CodeChunk]:
+        """
+        Extract code file as symbol-aware chunks (v3.0 code indexing).
+
+        This method provides intelligent code-aware chunking that preserves
+        symbol boundaries (procedures, functions, classes, etc.) for
+        better RAG performance with legacy codebases.
+
+        Args:
+            file_path: Path to code file
+            document_id: Document ID to use for chunks
+
+        Returns:
+            List of CodeChunk objects with symbol metadata
+        """
+        if not is_code_file(str(file_path)):
+            raise ValueError(f"Not a supported code file: {file_path}")
+
+        content, language, unit_name = self._code_extractor.extract_file(str(file_path))
+
+        chunks = self._code_extractor.chunk_code(
+            content=content,
+            document_id=document_id,
+            filename=file_path.name,
+            language=language,
+            unit_name=unit_name,
+        )
+
+        logger.info(
+            f"Extracted {len(chunks)} chunks from code file {file_path.name} "
+            f"(language: {language.value}, unit: {unit_name or 'N/A'})"
+        )
+
+        return chunks
+
+    def is_code_file(self, file_path: Union[str, Path]) -> bool:
+        """Check if a file is a supported code file."""
+        return is_code_file(str(file_path))

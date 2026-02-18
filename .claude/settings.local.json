@@ -9,7 +9,8 @@
       "Bash(curl:*)",
       "Bash(python -m json.tool:*)",
       "Bash(python -m py_compile:*)",
-      "Bash(.venv/Scripts/python:*)"
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(cat:*)"
     ]
   }
 }

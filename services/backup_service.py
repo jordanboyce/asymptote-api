@@ -55,7 +55,6 @@ class BackupService:
         logger.info(f"Creating backup: {backup_name}")
 
         # Get paths from collection service (correct path structure)
-        storage_type = settings.metadata_storage
         index_dir = collection_service.get_indexes_path(collection_id)
         documents_dir = collection_service.get_documents_path(collection_id)
 
@@ -73,7 +72,6 @@ class BackupService:
             "collection_name": collection_name,
             "collection_color": collection_color,
             "description": description,
-            "storage_type": storage_type,
             "embedding_model": settings.embedding_model,
             "chunk_size": settings.chunk_size,
             "chunk_overlap": settings.chunk_overlap,
@@ -144,7 +142,6 @@ class BackupService:
 
             # Determine target collection
             collection_id = target_collection_id or metadata.get("collection_id", "default")
-            storage_type = metadata.get("storage_type", settings.metadata_storage)
 
             # Check if collection exists in database
             existing_collection = collection_service.get_collection(collection_id)

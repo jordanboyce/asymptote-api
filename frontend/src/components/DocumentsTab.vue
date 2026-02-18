@@ -35,12 +35,12 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.docx,.csv,.md,.json"
+            accept=".pdf,.txt,.docx,.csv,.md,.json,.pas,.dpr,.dpk,.pp,.inc,.dfm,.mod,.def,.mi,.asm,.s"
             class="file-input file-input-bordered w-full"
             @change="handleFileSelect"
           />
           <label class="label">
-            <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV, MD, JSON)</span>
+            <span class="label-text-alt">Documents or Code files (Pascal, Delphi, Modula-2, Assembly)</span>
           </label>
         </div>
 
@@ -55,7 +55,7 @@
             @change="handleFolderSelect"
           />
           <label class="label">
-            <span class="label-text-alt">Select a folder - only supported file types will be uploaded (PDF, TXT, DOCX, CSV, MD, JSON)</span>
+            <span class="label-text-alt">Select a folder - documents and code files will be uploaded</span>
           </label>
         </div>
 
@@ -94,8 +94,8 @@
             <table class="table table-xs table-zebra">
               <tbody>
                 <tr v-for="(file, index) in selectedFiles" :key="index">
-                  <td class="truncate" :title="file.name">{{ file.name }}</td>
-                  <td class="text-right">{{ formatFileSize(file.size) }}</td>
+                  <td class="truncate max-w-xs" :title="getDisplayPath(file)">{{ getDisplayPath(file) }}</td>
+                  <td class="text-right whitespace-nowrap">{{ formatFileSize(file.size) }}</td>
                   <td class="w-8">
                     <button
                       class="btn btn-ghost btn-xs text-error"
@@ -201,8 +201,8 @@
             </td>
             <td>
               <div class="flex items-center gap-3">
-                <div class="flex items-center justify-center w-10 h-10 rounded-lg bg-error/20">
-                  <FileText :size="24" class="text-error" />
+                <div class="flex items-center justify-center w-10 h-10 rounded-lg" :class="getFileIconClass(doc.filename)">
+                  <component :is="getFileIcon(doc.filename)" :size="24" :class="getFileIconTextClass(doc.filename)" />
                 </div>
                 <div>
                   <div class="font-bold">{{ doc.filename }}</div>
@@ -291,7 +291,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from 'axios'
-import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle, FolderOpen } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle, FolderOpen, FileCode } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
 
 const emit = defineEmits(['document-deleted'])
@@ -310,7 +310,16 @@ const uploadError = ref('')
 const uploadResult = ref({})
 
 // Supported file extensions
-const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.csv', '.md', '.json']
+const SUPPORTED_EXTENSIONS = [
+  // Documents
+  '.pdf', '.txt', '.docx', '.csv', '.md', '.json',
+  // Pascal/Delphi
+  '.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm',
+  // Modula-2
+  '.mod', '.def', '.mi',
+  // Assembly
+  '.asm', '.s'
+]
 
 // Document management state
 const documents = ref([])
@@ -350,7 +359,7 @@ const handleFolderSelect = (event) => {
   // Show info if some files were filtered out
   const skippedCount = allFiles.length - supportedFiles.length
   if (skippedCount > 0) {
-    uploadError.value = `${skippedCount} unsupported file(s) skipped. Only PDF, TXT, DOCX, CSV, MD, and JSON files are supported.`
+    uploadError.value = `${skippedCount} unsupported file(s) skipped.`
   }
 }
 
@@ -371,6 +380,12 @@ const clearAllFiles = () => {
   }
   uploadSuccess.value = false
   uploadError.value = ''
+}
+
+const getDisplayPath = (file) => {
+  // For folder uploads, webkitRelativePath contains "folder/subfolder/file.ext"
+  // For single file uploads, it's empty, so fall back to file.name
+  return file.webkitRelativePath || file.name
 }
 
 const formatFileSize = (bytes) => {
@@ -517,6 +532,26 @@ const formatDate = (dateString) => {
   if (!dateString) return 'N/A'
   const date = new Date(dateString)
   return date.toLocaleString()
+}
+
+// Code file extensions for icon display
+const CODE_EXTENSIONS = ['.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm', '.mod', '.def', '.mi', '.asm', '.s']
+
+const isCodeFile = (filename) => {
+  const ext = '.' + filename.split('.').pop().toLowerCase()
+  return CODE_EXTENSIONS.includes(ext)
+}
+
+const getFileIcon = (filename) => {
+  return isCodeFile(filename) ? FileCode : FileText
+}
+
+const getFileIconClass = (filename) => {
+  return isCodeFile(filename) ? 'bg-primary/20' : 'bg-error/20'
+}
+
+const getFileIconTextClass = (filename) => {
+  return isCodeFile(filename) ? 'text-primary' : 'text-error'
 }
 
 const confirmDelete = (doc) => {

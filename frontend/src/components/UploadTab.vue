@@ -11,12 +11,12 @@
         ref="fileInput"
         type="file"
         multiple
-        accept=".pdf,.txt,.docx,.csv,.md,.json"
+        accept=".pdf,.txt,.docx,.csv,.md,.json,.pas,.dpr,.dpk,.pp,.inc,.dfm,.mod,.def,.mi,.asm,.s"
         class="file-input file-input-bordered w-full"
         @change="handleFileSelect"
       />
       <label class="label">
-        <span class="label-text-alt">Select one or more files (PDF, TXT, DOCX, CSV, MD, JSON)</span>
+        <span class="label-text-alt">Documents (PDF, TXT, DOCX, CSV, MD, JSON) or Code (Pascal, Delphi, Modula-2, Assembly)</span>
       </label>
     </div>
 
@@ -139,8 +139,9 @@
         <h3 class="font-bold">Upload Tips</h3>
         <div class="text-xs">
           <ul class="list-disc list-inside mt-1">
-            <li>Supported formats: PDF, TXT, DOCX, CSV, MD, JSON</li>
-            <li>Files are processed and indexed automatically</li>
+            <li><strong>Documents:</strong> PDF, TXT, DOCX, CSV, MD, JSON</li>
+            <li><strong>Code:</strong> Pascal/Delphi (.pas, .dpr, .dpk, .dfm), Modula-2 (.mod, .def), Assembly (.asm)</li>
+            <li>Code files are intelligently chunked to preserve function/procedure boundaries</li>
             <li>Larger files may take longer to process</li>
             <li>Duplicate files (by content) are automatically detected</li>
           </ul>

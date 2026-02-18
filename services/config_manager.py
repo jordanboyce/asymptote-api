@@ -3,7 +3,6 @@
 Handles runtime configuration changes including:
 - Embedding model selection
 - Chunking parameters
-- Metadata storage type
 - Other indexing settings
 
 Configuration is stored in SQLite database for persistence across restarts.
@@ -36,7 +35,6 @@ class ConfigManager:
             "embedding_model": settings.embedding_model,
             "chunk_size": settings.chunk_size,
             "chunk_overlap": settings.chunk_overlap,
-            "metadata_storage": settings.metadata_storage,
             "default_top_k": settings.default_top_k,
             "max_top_k": settings.max_top_k,
             "data_dir": str(settings.data_dir),
@@ -75,14 +73,14 @@ class ConfigManager:
         }
 
         # Fields that require restart
-        restart_fields = {"embedding_model", "metadata_storage", "host", "port"}
+        restart_fields = {"embedding_model", "host", "port"}
         # Fields that require re-indexing
         reindex_fields = {"embedding_model", "chunk_size", "chunk_overlap"}
 
         # Validate updates
         valid_fields = {
             "embedding_model", "chunk_size", "chunk_overlap",
-            "metadata_storage", "default_top_k", "max_top_k"
+            "default_top_k", "max_top_k"
         }
 
         for key in updates.keys():

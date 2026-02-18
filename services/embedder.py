@@ -2,6 +2,8 @@
 
 from typing import List
 import logging
+import os
+import sys
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -20,7 +22,22 @@ class EmbeddingService:
         """
         self.model_name = model_name
         logger.info(f"Loading embedding model: {model_name}")
-        self.model = SentenceTransformer(model_name)
+
+        # Try to load the model, with helpful error messages for SSL issues
+        try:
+            self.model = SentenceTransformer(model_name)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if 'ssl' in error_msg or 'certificate' in error_msg:
+                logger.error(
+                    f"SSL certificate error when downloading model '{model_name}'. "
+                    f"This often happens with packaged executables. "
+                    f"Try: 1) Run from source instead of exe, or "
+                    f"2) Pre-download the model by running: "
+                    f"python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('{model_name}')\""
+                )
+            raise
+
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
         logger.info(f"Model loaded. Embedding dimension: {self.embedding_dim}")
 

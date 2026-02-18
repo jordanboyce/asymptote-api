@@ -15,15 +15,13 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
 
     # Text chunking configuration
-    chunk_size: int = 600
+    chunk_size: int = 550
     chunk_overlap: int = 100
 
     # Search configuration
     default_top_k: int = 10
     max_top_k: int = 50
 
-    # Metadata storage
-    metadata_storage: str = "json"  # "json" or "sqlite"
 
     # Server configuration
     host: str = "0.0.0.0"

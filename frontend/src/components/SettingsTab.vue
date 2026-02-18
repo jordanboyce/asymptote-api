@@ -24,14 +24,6 @@
           Search Config
         </a>
         <a
-          href="#metadata-storage"
-          class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
-          :class="activeSection === 'metadata-storage' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-base-200 text-base-content/70'"
-          @click.prevent="scrollToSection('metadata-storage')"
-        >
-          Metadata Storage
-        </a>
-        <a
           href="#appearance"
           class="block px-3 py-1.5 text-sm rounded-lg transition-colors"
           :class="activeSection === 'appearance' ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-base-200 text-base-content/70'"
@@ -354,100 +346,6 @@
               @change="saveDefaultTopK"
             />
             <p class="text-xs text-base-content/60 mt-2">Sets the default for new searches. You can override this per search.</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Metadata Storage (Global) -->
-      <div id="metadata-storage" class="card bg-base-200 scroll-mt-36">
-        <div class="card-body">
-          <div class="flex items-center gap-2">
-            <h3 class="card-title">Metadata Storage</h3>
-            <span class="badge badge-sm badge-ghost">Global</span>
-          </div>
-          <p class="text-sm text-base-content/70 mb-4">
-            Choose how document metadata is stored. This is a global setting that applies to all collections.
-          </p>
-
-          <div class="space-y-4">
-            <!-- Current Storage Type -->
-            <div class="alert alert-info">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-              </svg>
-              <div>
-                <div class="font-bold">Current Storage</div>
-                <div class="text-sm capitalize">{{ currentConfig.metadata_storage }}</div>
-              </div>
-            </div>
-
-            <!-- Storage Selection -->
-            <div class="form-control">
-              <label class="label cursor-pointer justify-start gap-4">
-                <input
-                  type="radio"
-                  name="storage"
-                  class="radio radio-primary"
-                  value="json"
-                  v-model="selectedStorage"
-                  @change="onStorageChange"
-                />
-                <div class="flex-1">
-                  <span class="label-text font-medium">JSON (Simple)</span>
-                  <p class="text-xs text-base-content/60">
-                    Human-readable, good for &lt;100 documents. Loads entire metadata into memory.
-                  </p>
-                </div>
-              </label>
-            </div>
-
-            <div class="form-control">
-              <label class="label cursor-pointer justify-start gap-4">
-                <input
-                  type="radio"
-                  name="storage"
-                  class="radio radio-primary"
-                  value="sqlite"
-                  v-model="selectedStorage"
-                  @change="onStorageChange"
-                />
-                <div class="flex-1">
-                  <span class="label-text font-medium">SQLite (Scalable)</span>
-                  <p class="text-xs text-base-content/60">
-                    Database storage, excellent for 1,000+ documents. 50x less memory, 30x faster startup.
-                  </p>
-                </div>
-              </label>
-            </div>
-
-            <!-- Warning about restart -->
-            <div v-if="storageChanged" class="alert alert-warning">
-              <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-              <div>
-                <div class="font-bold">Server restart required</div>
-                <div class="text-sm">
-                  Switching storage types requires restarting the server. Your existing data will remain in the old location.
-                  You'll need to re-upload documents to populate the new storage.
-                </div>
-              </div>
-            </div>
-
-            <!-- Apply Button -->
-            <button
-              class="btn btn-primary"
-              :disabled="!storageChanged || applyingStorage"
-              @click="applyStorageChange"
-            >
-              <span v-if="applyingStorage" class="loading loading-spinner loading-sm"></span>
-              {{ applyingStorage ? 'Applying...' : 'Apply Storage Change' }}
-            </button>
-
-            <!-- Success/Error Messages -->
-            <div v-if="storageMessage" class="alert" :class="storageMessageType === 'success' ? 'alert-success' : 'alert-error'">
-              <div>{{ storageMessage }}</div>
-            </div>
           </div>
         </div>
       </div>
@@ -1266,7 +1164,7 @@
                 <li><strong>Embeddings:</strong> sentence-transformers (all-MiniLM-L6-v2)</li>
                 <li><strong>Vector Search:</strong> FAISS (Facebook AI Similarity Search)</li>
                 <li><strong>Document Processing:</strong> pypdf, pdfplumber, python-docx, pandas</li>
-                <li><strong>Metadata Storage:</strong> SQLite or JSON</li>
+                <li><strong>Metadata Storage:</strong> SQLite</li>
               </ul>
             </div>
           </div>
@@ -1348,7 +1246,7 @@ const emit = defineEmits(['data-cleared', 'stats-updated'])
 const collectionStore = useCollectionStore()
 
 // Table of contents navigation
-const activeSection = ref('collection-info')
+const activeSection = ref('ai-integration')
 const sectionIds = [
   'ai-integration',
   'search-config',
@@ -1429,24 +1327,19 @@ const currentConfig = ref({
   embedding_model: '',
   chunk_size: 600,
   chunk_overlap: 100,
-  metadata_storage: 'json',
 })
 const availableModels = ref([])
 const selectedModel = ref('')
 const chunkSize = ref(600)
 const chunkOverlap = ref(100)
-const selectedStorage = ref('json')
 
 // UI State
 const applyingConfig = ref(false)
 const applyingChunking = ref(false)
-const applyingStorage = ref(false)
 const configMessage = ref('')
 const configMessageType = ref('success')
 const chunkingMessage = ref('')
 const chunkingMessageType = ref('success')
-const storageMessage = ref('')
-const storageMessageType = ref('success')
 
 // Reindex state
 const reindexing = ref(false)
@@ -1503,10 +1396,6 @@ const chunkingChanged = computed(() => {
   const currentChunkSize = collectionStore.currentCollection?.chunk_size || currentConfig.value.chunk_size
   const currentChunkOverlap = collectionStore.currentCollection?.chunk_overlap || currentConfig.value.chunk_overlap
   return chunkSize.value !== currentChunkSize || chunkOverlap.value !== currentChunkOverlap
-})
-
-const storageChanged = computed(() => {
-  return selectedStorage.value !== currentConfig.value.metadata_storage
 })
 
 const estimatedChunks = computed(() => {
@@ -1729,7 +1618,6 @@ const loadConfig = async () => {
     // Load global config
     const response = await axios.get('/api/config')
     currentConfig.value = response.data
-    selectedStorage.value = response.data.metadata_storage
 
     // Load collection-specific settings
     const collection = collectionStore.currentCollection
@@ -1765,10 +1653,6 @@ const onModelChange = () => {
 
 const onChunkingChange = () => {
   chunkingMessage.value = ''
-}
-
-const onStorageChange = () => {
-  storageMessage.value = ''
 }
 
 const applyModelChange = async () => {
@@ -1819,35 +1703,6 @@ const applyChunkingChange = async () => {
     chunkingMessage.value = 'Error: ' + (error.response?.data?.detail || error.message)
   } finally {
     applyingChunking.value = false
-  }
-}
-
-const applyStorageChange = async () => {
-  applyingStorage.value = true
-  storageMessage.value = ''
-
-  try {
-    const response = await axios.post('/api/config', {
-      metadata_storage: selectedStorage.value
-    })
-
-    if (response.data.success) {
-      storageMessageType.value = 'success'
-      if (response.data.requires_restart) {
-        storageMessage.value = 'Configuration updated. Please restart the server. You will need to re-upload documents to populate the new storage.'
-      } else {
-        storageMessage.value = 'Configuration updated successfully.'
-      }
-      await loadConfig()
-    } else {
-      storageMessageType.value = 'error'
-      storageMessage.value = 'Failed to update configuration: ' + (response.data.errors?.join(', ') || 'Unknown error')
-    }
-  } catch (error) {
-    storageMessageType.value = 'error'
-    storageMessage.value = 'Error: ' + (error.response?.data?.detail || error.message)
-  } finally {
-    applyingStorage.value = false
   }
 }
 

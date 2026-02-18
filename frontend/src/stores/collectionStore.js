@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import axios from 'axios'
+import { useSearchStore } from './searchStore'
 
 export const useCollectionStore = defineStore('collection', () => {
   // State
@@ -103,9 +104,20 @@ export const useCollectionStore = defineStore('collection', () => {
   }
 
   function setCurrentCollection(collectionId) {
+    // Only do something if the collection is actually changing
+    if (collectionId === currentCollectionId.value) {
+      return
+    }
+
     currentCollectionId.value = collectionId
     // Persist selection
     localStorage.setItem('asymptote_current_collection', collectionId)
+
+    // Clear search state when switching collections
+    const searchStore = useSearchStore()
+    searchStore.setQuery('')
+    searchStore.clearResults()
+    searchStore.syncCacheCount()  // Update cache count for new collection
   }
 
   function initializeFromStorage() {

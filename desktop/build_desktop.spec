@@ -2,12 +2,17 @@
 # PyInstaller spec file for Asymptote Desktop
 
 import os
+import sys
+import certifi
 
 # Get paths
 spec_root = os.path.abspath(SPECPATH)
 project_root = os.path.dirname(spec_root)
 
 block_cipher = None
+
+# Get certifi CA bundle path for SSL
+certifi_path = os.path.dirname(certifi.__file__)
 
 a = Analysis(
     [
@@ -28,7 +33,8 @@ a = Analysis(
         # Include all Python source directories
         (os.path.join(project_root, 'services'), 'services'),
         (os.path.join(project_root, 'models'), 'models'),
-        (os.path.join(project_root, 'api'), 'api'),
+        # Include SSL certificates for HuggingFace downloads
+        (os.path.join(certifi_path, 'cacert.pem'), 'certifi'),
     ],
     hiddenimports=[
         # Main app and dependencies
@@ -37,14 +43,21 @@ a = Analysis(
         # Application modules
         'services',
         'services.ai_service',
-        'services.embedding_service',
-        'services.vector_store_json',
-        'services.vector_store_sqlite',
+        'services.embedder',
+        'services.vector_store',
+        'services.metadata_store',
+        'services.document_extractor',
+        'services.chunker',
+        'services.indexer_manager',
+        'services.collection_service',
+        'services.backup_service',
+        'services.reindex_service',
+        'services.config_manager',
+        'services.app_database',
+        'services.indexing',
+        'services.indexing.indexer',
         'models',
-        'models.document',
-        'models.search',
-        'api',
-        'api.routes',
+        'models.schemas',
         # Uvicorn
         'uvicorn.logging',
         'uvicorn.loops',
@@ -69,6 +82,10 @@ a = Analysis(
         'faiss',
         'torch',
         'transformers',
+        'huggingface_hub',
+        # SSL/Certificates
+        'certifi',
+        'ssl',
         # FastAPI dependencies
         'starlette.middleware',
         'starlette.middleware.cors',

@@ -2,7 +2,7 @@
 ; Requires Inno Setup 6.0 or later: https://jrsoftware.org/isdl.php
 
 #define MyAppName "Asymptote"
-#define MyAppVersion "2.5.0"
+#define MyAppVersion "3.0.1-beta"
 #define MyAppPublisher "Jordan Boyce"
 #define MyAppURL "https://github.com/jordanboyce/asymptote"
 #define MyAppExeName "Asymptote.exe"

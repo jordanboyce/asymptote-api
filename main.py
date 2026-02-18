@@ -18,11 +18,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from services.document_extractor import DocumentExtractor
+from services.document_extractor import DocumentExtractor, is_code_file
+from services.code_extractor import SUPPORTED_CODE_EXTENSIONS
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
-from services.vector_store_v2 import VectorStoreV2
 from services.indexing import DocumentIndexer
 from services.ai_service import AIService, create_provider, detect_ollama
 from services.config_manager import config_manager
@@ -40,6 +40,8 @@ from models.schemas import (
     AskRequest,
     AskResponse,
     AskSource,
+    RepoUploadRequest,
+    RepoUploadResponse,
 )
 
 # Configure logging
@@ -103,7 +105,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Asymptote API ready")
     logger.info(f"Data directory: {settings.data_dir}")
-    logger.info(f"Metadata storage: {settings.metadata_storage}")
 
     yield
 
@@ -223,13 +224,13 @@ async def upload_documents(
     document_dir = indexer_manager.get_documents_path(collection_id)
 
     # Validate all files have supported extensions
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
     for file in files:
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in SUPPORTED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported types: PDF, TXT, DOCX, CSV, MD, JSON",
+                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, MD, JSON, and code files (Pascal, Delphi, Modula-2, Assembly)",
             )
 
     indexed_docs = []
@@ -240,8 +241,16 @@ async def upload_documents(
     for file in files:
         try:
             # Save uploaded file to collection's document directory
-            # Use only the basename to avoid directory traversal issues
-            safe_filename = Path(file.filename).name
+            # Preserve relative path context by replacing separators with underscores
+            # This handles folder uploads where file.filename may be "src/utils/helper.pas"
+            # Converting to "src_utils_helper.pas" prevents collisions and preserves context
+            raw_filename = file.filename.replace('\\', '/').lstrip('/')
+            if '/' in raw_filename:
+                # Folder upload - flatten path to safe filename
+                safe_filename = raw_filename.replace('/', '_')
+            else:
+                # Single file upload - use as-is
+                safe_filename = raw_filename
             file_path = document_dir / safe_filename
             with open(file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
@@ -263,9 +272,8 @@ async def upload_documents(
             failed_docs.append({"filename": file.filename, "error": str(e)})
             # Clean up the saved file if indexing failed
             try:
-                cleanup_path = document_dir / Path(file.filename).name
-                if cleanup_path.exists():
-                    cleanup_path.unlink()
+                if file_path.exists():
+                    file_path.unlink()
             except Exception:
                 pass
             # Continue processing remaining files
@@ -297,6 +305,201 @@ async def upload_documents(
         total_pages=total_pages,
         total_chunks=total_chunks,
         document_ids=indexed_docs,
+    )
+
+
+@app.post(
+    "/documents/upload-repo",
+    response_model=RepoUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload and index a code repository or folder",
+    tags=["documents"],
+)
+async def upload_repository(
+    request: RepoUploadRequest,
+) -> RepoUploadResponse:
+    """
+    Scan a local repository or folder and index all supported files.
+
+    This endpoint is optimized for indexing code repositories, especially
+    legacy Pascal/Delphi/Modula-2/Assembly codebases.
+
+    **Supported file types:**
+    - Documents: PDF, TXT, DOCX, CSV, MD, JSON
+    - Code: .pas, .dpr, .dpk, .pp, .inc, .dfm (Pascal/Delphi)
+    - Code: .mod, .def, .mi (Modula-2)
+    - Code: .asm, .s (Assembly)
+
+    **Code-aware chunking:**
+    Code files are intelligently chunked to preserve symbol boundaries
+    (procedures, functions, classes, records, etc.) for better RAG performance.
+
+    Args:
+        request: Repository upload configuration including:
+            - path: Local filesystem path to scan
+            - collection_id: Target collection (default: "default")
+            - recursive: Whether to scan subdirectories (default: True)
+            - include_patterns: Glob patterns to include (optional)
+            - exclude_patterns: Glob patterns to exclude (defaults exclude common directories)
+
+    Example:
+        ```json
+        {
+            "path": "C:/Projects/LegacyApp/src",
+            "collection_id": "legacy-code",
+            "recursive": true,
+            "include_patterns": ["*.pas", "*.dpr", "*.asm"],
+            "exclude_patterns": ["**/backup/**", "**/old/**"]
+        }
+        ```
+    """
+    import fnmatch
+    import os
+
+    repo_path = Path(request.path)
+
+    if not repo_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path does not exist: {request.path}",
+        )
+
+    if not repo_path.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {request.path}",
+        )
+
+    # Get indexer for the collection
+    try:
+        indexer = get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    # Get document directory for this collection
+    document_dir = indexer_manager.get_documents_path(request.collection_id)
+
+    # Determine supported extensions based on include_patterns or default
+    all_supported = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
+
+    # Collect all files to process
+    files_to_index = []
+
+    def should_exclude(file_path: Path) -> bool:
+        """Check if file matches any exclude pattern."""
+        rel_path = str(file_path.relative_to(repo_path))
+        for pattern in (request.exclude_patterns or []):
+            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(rel_path.replace('\\', '/'), pattern):
+                return True
+        return False
+
+    def should_include(file_path: Path) -> bool:
+        """Check if file matches include patterns (or all supported if none specified)."""
+        if request.include_patterns:
+            filename = file_path.name
+            for pattern in request.include_patterns:
+                if fnmatch.fnmatch(filename, pattern):
+                    return True
+            return False
+        else:
+            # No include patterns = use all supported extensions
+            return file_path.suffix.lower() in all_supported
+
+    # Walk the directory tree
+    if request.recursive:
+        for root, dirs, files in os.walk(repo_path):
+            # Filter out excluded directories to speed up traversal
+            dirs[:] = [d for d in dirs if not should_exclude(Path(root) / d)]
+
+            for filename in files:
+                file_path = Path(root) / filename
+                if not should_exclude(file_path) and should_include(file_path):
+                    files_to_index.append(file_path)
+    else:
+        for file_path in repo_path.iterdir():
+            if file_path.is_file() and not should_exclude(file_path) and should_include(file_path):
+                files_to_index.append(file_path)
+
+    if not files_to_index:
+        return RepoUploadResponse(
+            message=f"No matching files found in {request.path}",
+            files_found=0,
+            files_indexed=0,
+            files_failed=0,
+            total_chunks=0,
+            document_ids=[],
+            failed_files=[],
+        )
+
+    logger.info(f"Found {len(files_to_index)} files to index from {request.path}")
+
+    # Index each file
+    indexed_docs = []
+    failed_docs = []
+    total_chunks = 0
+
+    for file_path in files_to_index:
+        try:
+            # Create a unique filename that preserves some path context
+            # Use relative path with separators replaced to avoid collisions
+            rel_path = file_path.relative_to(repo_path)
+            # Replace path separators with underscores for safe filename
+            safe_filename = str(rel_path).replace('/', '_').replace('\\', '_')
+
+            # Copy file to collection's document directory
+            dest_path = document_dir / safe_filename
+            shutil.copy2(file_path, dest_path)
+
+            logger.info(f"Indexing: {rel_path}")
+
+            # Index the document
+            doc_metadata = indexer.index_document(dest_path, safe_filename)
+
+            # Register document with collection
+            collection_service.add_document(request.collection_id, doc_metadata.document_id)
+
+            indexed_docs.append(doc_metadata.document_id)
+            total_chunks += doc_metadata.total_chunks
+
+        except Exception as e:
+            logger.error(f"Failed to index {file_path}: {e}")
+            failed_docs.append({
+                "filename": str(file_path.relative_to(repo_path)),
+                "error": str(e)
+            })
+            # Clean up if copy succeeded but indexing failed
+            try:
+                rel_path = file_path.relative_to(repo_path)
+                safe_filename = str(rel_path).replace('/', '_').replace('\\', '_')
+                cleanup_path = document_dir / safe_filename
+                if cleanup_path.exists():
+                    cleanup_path.unlink()
+            except Exception:
+                pass
+
+    # Persist the index if any documents were successfully indexed
+    if indexed_docs:
+        indexer.save_index()
+
+    # Build response message
+    if failed_docs and not indexed_docs:
+        message = f"All {len(failed_docs)} files failed to index from {request.path}"
+    elif failed_docs:
+        message = f"Indexed {len(indexed_docs)} files from {request.path}. {len(failed_docs)} files failed."
+    else:
+        message = f"Successfully indexed {len(indexed_docs)} files from {request.path}"
+
+    return RepoUploadResponse(
+        message=message,
+        files_found=len(files_to_index),
+        files_indexed=len(indexed_docs),
+        files_failed=len(failed_docs),
+        total_chunks=total_chunks,
+        document_ids=indexed_docs,
+        failed_files=failed_docs,
     )
 
 
@@ -959,7 +1162,6 @@ async def start_reindex():
             embedding_model=current_config["embedding_model"],
             chunk_size=current_config["chunk_size"],
             chunk_overlap=current_config["chunk_overlap"],
-            metadata_storage=current_config["metadata_storage"],
             embedding_dim=embedding_dim,
         )
 
@@ -1030,7 +1232,6 @@ async def start_collection_reindex(collection_id: str):
             embedding_model=collection["embedding_model"],
             chunk_size=collection["chunk_size"],
             chunk_overlap=collection["chunk_overlap"],
-            metadata_storage=settings.metadata_storage,
             embedding_dim=embedding_dim,
         )
 
@@ -1513,11 +1714,28 @@ async def get_pdf(
             '.txt': 'text/plain',
             '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             '.csv': 'text/csv',
+            '.md': 'text/markdown',
+            '.json': 'application/json',
+            # Code files - serve as plain text for browser preview
+            '.pas': 'text/plain',
+            '.dpr': 'text/plain',
+            '.dpk': 'text/plain',
+            '.pp': 'text/plain',
+            '.inc': 'text/plain',
+            '.dfm': 'text/plain',
+            '.mod': 'text/plain',
+            '.def': 'text/plain',
+            '.mi': 'text/plain',
+            '.asm': 'text/plain',
+            '.s': 'text/plain',
         }
         media_type = media_types.get(file_ext, 'application/octet-stream')
 
-        # Return file with inline display for PDFs, download for others
-        disposition = 'inline' if file_ext == '.pdf' else 'attachment'
+        # Files that can be previewed inline in the browser
+        inline_extensions = {'.pdf', '.txt', '.md', '.json', '.csv',
+                            '.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm',
+                            '.mod', '.def', '.mi', '.asm', '.s'}
+        disposition = 'inline' if file_ext in inline_extensions else 'attachment'
         return FileResponse(
             path=doc_path,
             media_type=media_type,

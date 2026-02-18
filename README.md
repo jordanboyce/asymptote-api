@@ -311,62 +311,10 @@ CHUNK_OVERLAP=100                       # Overlap between chunks
 DEFAULT_TOP_K=10                        # Default number of results
 MAX_TOP_K=50                            # Maximum results allowed
 
-# Metadata storage
-METADATA_STORAGE=json                   # "json" or "sqlite"
-
 # Server
 HOST=0.0.0.0
 PORT=8000
 ```
-
-### Metadata Storage: JSON vs SQLite
-
-**JSON (Default for new users):**
-- ✅ Simple, human-readable
-- ✅ Good for <100 documents
-- ✅ Easy to inspect/debug
-- ⚠️ Loads entire file into memory
-
-**SQLite (Recommended for scale):**
-- ✅ Handles thousands of documents
-- ✅ 50x less memory usage
-- ✅ 30x faster startup
-- ✅ Better for production
-
-#### Switching Between Storage Types
-
-Both storage types now use **separate directories** to prevent data conflicts:
-- **JSON storage**: `data/indexes/json/`
-- **SQLite storage**: `data/indexes/sqlite/`
-
-**To switch from JSON to SQLite:**
-1. Change `METADATA_STORAGE=sqlite` in `.env` or `config.py`
-2. Restart the server
-3. Your JSON data remains in `data/indexes/json/` (untouched)
-4. SQLite will start fresh in `data/indexes/sqlite/` (empty)
-5. Re-upload your documents to populate the SQLite index
-
-**To switch from SQLite to JSON:**
-1. Change `METADATA_STORAGE=json` in `.env` or `config.py`
-2. Restart the server
-3. Your SQLite data remains in `data/indexes/sqlite/` (untouched)
-4. JSON will start fresh in `data/indexes/json/` (empty)
-5. Re-upload your documents to populate the JSON index
-
-**Important:** Switching storage types requires re-uploading documents. Both storage systems maintain independent indexes, so you can safely switch back and forth without losing data.
-
-**To switch to SQLite:**
-```bash
-echo "METADATA_STORAGE=sqlite" >> .env
-python main.py
-```
-
-**To migrate existing data:**
-```bash
-python migrate_to_sqlite.py
-```
-
-See [METADATA_STORAGE.md](METADATA_STORAGE.md) for details.
 
 ### AI Features (Optional)
 
@@ -642,7 +590,34 @@ pip install faiss-cpu
   1. Get model from https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
   2. Place in `~/.cache/torch/sentence_transformers/`
 
-#### 4. "Document extraction failed"
+#### 4. "SSL certificate error" (Windows Executable)
+
+**Why:** The packaged Windows executable may have trouble with SSL certificates when downloading the embedding model from HuggingFace.
+
+**Error looks like:**
+```
+SSL: CERTIFICATE_VERIFY_FAILED
+```
+
+**Solutions:**
+
+1. **Pre-download the model** (Recommended):
+   Run this command once with regular Python (not the exe) before using the desktop app:
+   ```bash
+   python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+   ```
+   This downloads the model to `~/.cache/huggingface/` which the exe will then find automatically.
+
+2. **Run from source instead of exe:**
+   ```bash
+   pip install -r requirements.txt
+   python main.py
+   ```
+
+3. **Use the model cache from another machine:**
+   Copy the folder `~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/` from a working machine to the same location on the problem machine.
+
+#### 5. "Document extraction failed"
 
 **Possible causes:**
 - **PDFs:** Corrupted file, scanned images (no text layer), or protected/encrypted
@@ -662,7 +637,7 @@ pdftk input.pdf output output.pdf
 file -i yourfile.txt
 ```
 
-#### 5. "Out of memory"
+#### 6. "Out of memory"
 
 **For large PDFs or many documents:**
 
@@ -672,13 +647,9 @@ echo "CHUNK_SIZE=400" >> .env
 
 # Use smaller embedding model
 echo "EMBEDDING_MODEL=paraphrase-MiniLM-L3-v2" >> .env
-
-# Switch to SQLite for better memory usage
-echo "METADATA_STORAGE=sqlite" >> .env
-python migrate_to_sqlite.py
 ```
 
-#### 6. "Search returns no results"
+#### 7. "Search returns no results"
 
 **Checklist:**
 1. Are documents uploaded? Check: `curl http://localhost:8000/documents`
@@ -686,7 +657,7 @@ python migrate_to_sqlite.py
 3. Try broader query: "database" instead of "postgresql query optimization"
 4. Check logs for errors: Look at terminal output
 
-#### 7. "Docker container crashes"
+#### 8. "Docker container crashes"
 
 **Solution:**
 ```bash
@@ -856,8 +827,7 @@ asymptote/
 │   ├── document_extractor.py # Extracts text from documents (PDF, TXT, DOCX, CSV)
 │   ├── chunker.py            # Splits text into chunks
 │   ├── embedder.py           # Generates embeddings
-│   ├── vector_store.py       # FAISS index (JSON metadata)
-│   ├── vector_store_v2.py    # FAISS index (SQLite metadata)
+│   ├── vector_store.py       # FAISS index with SQLite metadata
 │   ├── metadata_store.py     # SQLite metadata storage
 │   ├── ai_service.py         # AI provider abstraction (Anthropic, OpenAI)
 │   └── indexing/
@@ -910,7 +880,6 @@ asymptote/
 ├── docker-compose.yml        # Docker setup
 ├── .dockerignore             # Docker build exclusions
 ├── .gitignore                # Git exclusions (includes certs/)
-├── migrate_to_sqlite.py      # Migrate JSON → SQLite
 ├── example_usage.py          # Python client example
 └── verify_setup.py           # Installation checker
 ```

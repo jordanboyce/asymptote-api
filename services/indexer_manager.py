@@ -15,7 +15,6 @@ from services.document_extractor import DocumentExtractor
 from services.chunker import TextChunker
 from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
-from services.vector_store_v2 import VectorStoreV2
 from services.indexing import DocumentIndexer
 from config import settings
 
@@ -92,16 +91,10 @@ class IndexerManager:
         indexes_dir = collection_service.get_indexes_path(collection_id)
 
         # Create vector store
-        if settings.metadata_storage.lower() == "sqlite":
-            vector_store = VectorStoreV2(
-                index_dir=indexes_dir,
-                embedding_dim=embedding_service.embedding_dim,
-            )
-        else:
-            vector_store = VectorStore(
-                index_dir=indexes_dir,
-                embedding_dim=embedding_service.embedding_dim,
-            )
+        vector_store = VectorStore(
+            index_dir=indexes_dir,
+            embedding_dim=embedding_service.embedding_dim,
+        )
 
         # Create text chunker with collection settings
         text_chunker = TextChunker(

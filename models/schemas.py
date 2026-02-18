@@ -23,6 +23,15 @@ class ChunkMetadata(BaseModel):
     csv_columns: Optional[List[str]] = Field(None, description="Column names for CSV row")
     csv_values: Optional[Dict[str, Any]] = Field(None, description="Column-value pairs for CSV row")
 
+    # v3.0: Code-specific metadata (for source code indexing)
+    language: Optional[str] = Field(None, description="Programming language: pascal, delphi, modula2, assembly")
+    unit_name: Optional[str] = Field(None, description="Unit/module name for code files")
+    symbol_name: Optional[str] = Field(None, description="Function/procedure/class name")
+    symbol_type: Optional[str] = Field(None, description="Symbol type: procedure, function, class, record, macro, label")
+    line_start: Optional[int] = Field(None, description="Starting line number in source file")
+    line_end: Optional[int] = Field(None, description="Ending line number in source file")
+    parent_symbol: Optional[str] = Field(None, description="Parent class/module for nested symbols")
+
 
 class DocumentMetadata(BaseModel):
     """Metadata for an indexed document."""
@@ -62,6 +71,14 @@ class SearchResult(BaseModel):
     csv_row_number: Optional[int] = Field(None, description="Row number for CSV results")
     csv_columns: Optional[List[str]] = Field(None, description="Column names for CSV row")
     csv_values: Optional[Dict[str, Any]] = Field(None, description="Column-value pairs for CSV row")
+
+    # v3.0: Code-specific result data (for code navigation)
+    language: Optional[str] = Field(None, description="Programming language")
+    unit_name: Optional[str] = Field(None, description="Unit/module name")
+    symbol_name: Optional[str] = Field(None, description="Function/procedure/class name")
+    symbol_type: Optional[str] = Field(None, description="Symbol type")
+    line_start: Optional[int] = Field(None, description="Starting line number")
+    line_end: Optional[int] = Field(None, description="Ending line number")
 
 
 class UploadResponse(BaseModel):
@@ -155,3 +172,32 @@ class AskResponse(BaseModel):
     collection_id: str = Field(..., description="Collection that was searched")
     model: str = Field(..., description="AI model used for synthesis")
     tokens_used: int = Field(0, description="Total tokens consumed")
+
+
+# Repository/Folder upload schemas
+class RepoUploadRequest(BaseModel):
+    """Request for uploading a code repository or folder."""
+
+    path: str = Field(..., description="Local filesystem path to the repository or folder")
+    collection_id: str = Field("default", description="Collection to add files to")
+    recursive: bool = Field(True, description="Recursively scan subdirectories")
+    include_patterns: Optional[List[str]] = Field(
+        None,
+        description="Glob patterns to include (e.g., ['*.pas', '*.dpr']). If not set, uses all supported extensions."
+    )
+    exclude_patterns: Optional[List[str]] = Field(
+        default_factory=lambda: ["**/node_modules/**", "**/.git/**", "**/build/**", "**/dist/**", "**/__pycache__/**"],
+        description="Glob patterns to exclude"
+    )
+
+
+class RepoUploadResponse(BaseModel):
+    """Response from repository upload endpoint."""
+
+    message: str = Field(..., description="Status message")
+    files_found: int = Field(..., description="Total files found matching patterns")
+    files_indexed: int = Field(..., description="Files successfully indexed")
+    files_failed: int = Field(..., description="Files that failed to index")
+    total_chunks: int = Field(..., description="Total chunks created")
+    document_ids: List[str] = Field(..., description="List of created document IDs")
+    failed_files: List[Dict[str, str]] = Field(default_factory=list, description="List of files that failed with error messages")
