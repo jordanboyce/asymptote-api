@@ -1,13 +1,14 @@
 """FAISS-based vector store with SQLite metadata for scalability."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 import logging
 import numpy as np
 import faiss
 
 from models.schemas import ChunkMetadata, SearchResult
 from services.metadata_store import MetadataStore
+from services.bm25_service import BM25Index
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class VectorStore:
         self.index_path = self.index_dir / "faiss.index"
         self.metadata_db_path = self.index_dir / "metadata.db"
         self.embeddings_path = self.index_dir / "embeddings.npy"
+        self.bm25_db_path = self.index_dir / "bm25.db"
 
         # FAISS index
         self.index: Optional[faiss.Index] = None
@@ -46,6 +48,9 @@ class VectorStore:
 
         # SQLite metadata store
         self.metadata_store = MetadataStore(self.metadata_db_path)
+
+        # BM25 keyword search index
+        self.bm25_index = BM25Index(self.bm25_db_path)
 
         self._load_or_create_index()
 
@@ -116,6 +121,10 @@ class VectorStore:
         chunk_dicts = [chunk.model_dump() for chunk in chunks]
         self.metadata_store.add_chunks(chunk_dicts)
 
+        # Add to BM25 index for keyword search
+        bm25_docs = [(chunk.chunk_id, chunk.text) for chunk in chunks]
+        self.bm25_index.add_documents_batch(bm25_docs)
+
         logger.info(f"Added {len(chunks)} chunks to index")
 
     def search(self, query_embedding: np.ndarray, top_k: int = 10) -> List[SearchResult]:
@@ -153,6 +162,11 @@ class VectorStore:
                 logger.warning(f"No metadata found for index {idx}")
                 continue
 
+            # Get document info for source_type
+            doc_info = self.metadata_store.get_document_info(chunk["document_id"])
+            source_type = doc_info.get("source_type") if doc_info else None
+            source_path = doc_info.get("source_path") if doc_info else None
+
             result = SearchResult(
                 filename=chunk["filename"],
                 page_number=chunk["page_number"],
@@ -168,10 +182,135 @@ class VectorStore:
                 csv_row_number=chunk.get("csv_row_number"),
                 csv_columns=chunk.get("csv_columns"),
                 csv_values=chunk.get("csv_values"),
+                # v3.1: Local file reference support
+                source_type=source_type,
+                source_path=source_path,
             )
             results.append(result)
 
         return results
+
+    def search_hybrid(
+        self,
+        query: str,
+        query_embedding: np.ndarray,
+        top_k: int = 10,
+        semantic_weight: float = 0.7
+    ) -> List[SearchResult]:
+        """
+        Perform hybrid search combining semantic similarity and BM25 keyword matching.
+
+        The final score is: semantic_weight * semantic_score + (1 - semantic_weight) * bm25_score
+
+        Args:
+            query: Original query text for BM25
+            query_embedding: Query embedding vector for semantic search
+            top_k: Number of results to return
+            semantic_weight: Weight for semantic scores (0-1), default 0.7
+                            Higher = more semantic, Lower = more keyword-focused
+
+        Returns:
+            List of SearchResult objects, sorted by combined score (highest first)
+        """
+        if self.index.ntotal == 0:
+            logger.warning("Index is empty, returning no results")
+            return []
+
+        # Get more candidates than top_k to allow for re-ranking
+        candidate_k = min(top_k * 3, self.index.ntotal)
+
+        # 1. Semantic search
+        query_normalized = query_embedding / np.linalg.norm(query_embedding)
+        query_normalized = query_normalized.reshape(1, -1).astype(np.float32)
+        semantic_sims, semantic_indices = self.index.search(query_normalized, candidate_k)
+
+        # Build semantic scores dict (chunk_id -> score)
+        semantic_scores: Dict[str, float] = {}
+        chunk_data: Dict[str, dict] = {}
+
+        for similarity, idx in zip(semantic_sims[0], semantic_indices[0]):
+            if idx == -1:
+                continue
+            chunk = self.metadata_store.get_chunk_by_index(int(idx))
+            if chunk:
+                chunk_id = chunk["chunk_id"]
+                semantic_scores[chunk_id] = float(similarity)
+                chunk_data[chunk_id] = chunk
+
+        # 2. BM25 keyword search
+        bm25_results = self.bm25_index.search(query, candidate_k)
+
+        # Normalize BM25 scores to 0-1 range
+        bm25_scores: Dict[str, float] = {}
+        if bm25_results:
+            max_bm25 = max(score for _, score in bm25_results)
+            if max_bm25 > 0:
+                for chunk_id, score in bm25_results:
+                    bm25_scores[chunk_id] = score / max_bm25
+                    # Fetch chunk data if not already in semantic results
+                    if chunk_id not in chunk_data:
+                        chunk = self._get_chunk_by_id(chunk_id)
+                        if chunk:
+                            chunk_data[chunk_id] = chunk
+
+        # 3. Combine scores
+        all_chunk_ids = set(semantic_scores.keys()) | set(bm25_scores.keys())
+        combined_scores: Dict[str, float] = {}
+
+        for chunk_id in all_chunk_ids:
+            sem_score = semantic_scores.get(chunk_id, 0)
+            bm25_score = bm25_scores.get(chunk_id, 0)
+            combined_scores[chunk_id] = (
+                semantic_weight * sem_score +
+                (1 - semantic_weight) * bm25_score
+            )
+
+        # 4. Sort by combined score and build results
+        sorted_chunks = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)
+
+        results = []
+        for chunk_id, combined_score in sorted_chunks[:top_k]:
+            chunk = chunk_data.get(chunk_id)
+            if not chunk:
+                continue
+
+            # Get document info for source_type
+            doc_info = self.metadata_store.get_document_info(chunk["document_id"])
+            source_type = doc_info.get("source_type") if doc_info else None
+            source_path = doc_info.get("source_path") if doc_info else None
+
+            result = SearchResult(
+                filename=chunk["filename"],
+                page_number=chunk["page_number"],
+                text_snippet=chunk["text"],
+                similarity_score=combined_score,
+                document_id=chunk["document_id"],
+                chunk_id=chunk["chunk_id"],
+                pdf_url="",
+                page_url="",
+                source_format=chunk.get("source_format"),
+                extraction_method=chunk.get("extraction_method"),
+                csv_row_number=chunk.get("csv_row_number"),
+                csv_columns=chunk.get("csv_columns"),
+                csv_values=chunk.get("csv_values"),
+                # v3.1: Local file reference support
+                source_type=source_type,
+                source_path=source_path,
+            )
+            results.append(result)
+
+        logger.info(f"Hybrid search returned {len(results)} results "
+                   f"(semantic_weight={semantic_weight})")
+        return results
+
+    def _get_chunk_by_id(self, chunk_id: str) -> Optional[dict]:
+        """Get chunk metadata by chunk_id."""
+        # This is a slower lookup but needed for BM25-only matches
+        chunks = self.metadata_store.get_all_chunks_ordered()
+        for chunk in chunks:
+            if chunk["chunk_id"] == chunk_id:
+                return chunk
+        return None
 
     def delete_document(self, document_id: str) -> int:
         """
@@ -194,6 +333,9 @@ class VectorStore:
 
         num_deleted = len(indices_to_delete)
         logger.info(f"Deleting {num_deleted} chunks for document {document_id}")
+
+        # Delete from BM25 index
+        self.bm25_index.remove_documents_by_document_id(document_id, self.metadata_db_path)
 
         # Delete from metadata (SQLite)
         self.metadata_store.delete_document(document_id)
@@ -260,8 +402,15 @@ class VectorStore:
         # Clear all metadata from database
         self.metadata_store.clear_all()
 
+        # Clear BM25 index
+        self.bm25_index.clear()
+
         # Save the empty index
         self.save()
 
         logger.info("Vector store cleared successfully")
+
+    def get_bm25_stats(self) -> Dict[str, any]:
+        """Get BM25 index statistics."""
+        return self.bm25_index.get_stats()
 

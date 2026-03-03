@@ -160,6 +160,54 @@ class AppDatabase:
                 ON collection_documents(collection_id)
             """)
 
+            # Upload jobs table for background upload processing
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS upload_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collection_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    total_files INTEGER DEFAULT 0,
+                    processed_files INTEGER DEFAULT 0,
+                    current_file TEXT,
+                    error TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    result_summary TEXT,
+                    phase TEXT,
+                    phase_progress INTEGER DEFAULT 0,
+                    phase_detail TEXT,
+                    chunks_processed INTEGER DEFAULT 0,
+                    chunks_total INTEGER DEFAULT 0,
+                    job_type TEXT DEFAULT 'upload'
+                )
+            """)
+
+            # Migration: Add phase columns to existing upload_jobs table
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN phase TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN phase_progress INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN phase_detail TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN chunks_processed INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN chunks_total INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE upload_jobs ADD COLUMN job_type TEXT DEFAULT 'upload'")
+            except sqlite3.OperationalError:
+                pass
+
             # Ensure default collection exists
             cursor = conn.execute("SELECT id FROM collections WHERE id = 'default'")
             if not cursor.fetchone():
@@ -404,6 +452,208 @@ class AppDatabase:
             if row:
                 return dict(row)
             return None
+
+    # Upload job methods
+    def create_upload_job(self, collection_id: str, total_files: int, job_type: str = "upload") -> int:
+        """Create a new upload job.
+
+        Args:
+            collection_id: Collection to upload to
+            total_files: Total number of files to process
+            job_type: Type of job - 'upload' for browser uploads, 'index' for local file indexing
+
+        Returns:
+            Job ID
+        """
+        timestamp = datetime.utcnow().isoformat()
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO upload_jobs
+                (collection_id, status, total_files, started_at, job_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (collection_id, "pending", total_files, timestamp, job_type)
+            )
+            conn.commit()
+            job_id = cursor.lastrowid
+            logger.info(f"Created {job_type} job {job_id} for collection {collection_id}")
+            return job_id
+
+    def update_upload_job(
+        self,
+        job_id: int,
+        status: Optional[str] = None,
+        processed_files: Optional[int] = None,
+        current_file: Optional[str] = None,
+        error: Optional[str] = None,
+        result_summary: Optional[str] = None,
+        phase: Optional[str] = None,
+        phase_progress: Optional[int] = None,
+        phase_detail: Optional[str] = None,
+        chunks_processed: Optional[int] = None,
+        chunks_total: Optional[int] = None,
+    ):
+        """Update upload job progress.
+
+        Args:
+            job_id: Job ID
+            status: New status (pending, running, completed, failed, cancelled)
+            processed_files: Number of files processed so far
+            current_file: Currently processing file
+            error: Error message if failed
+            result_summary: JSON string with results when completed
+            phase: Current processing phase (extracting, chunking, embedding, saving)
+            phase_progress: Progress within current phase (0-100)
+            phase_detail: Detailed phase status message
+            chunks_processed: Chunks processed in current file
+            chunks_total: Total chunks in current file
+        """
+        updates = []
+        params = []
+
+        if status:
+            updates.append("status = ?")
+            params.append(status)
+
+        if processed_files is not None:
+            updates.append("processed_files = ?")
+            params.append(processed_files)
+
+        if current_file is not None:
+            updates.append("current_file = ?")
+            params.append(current_file)
+
+        if error is not None:
+            updates.append("error = ?")
+            params.append(error)
+
+        if result_summary is not None:
+            updates.append("result_summary = ?")
+            params.append(result_summary)
+
+        # v4.0: Granular progress fields
+        if phase is not None:
+            updates.append("phase = ?")
+            params.append(phase)
+
+        if phase_progress is not None:
+            updates.append("phase_progress = ?")
+            params.append(phase_progress)
+
+        if phase_detail is not None:
+            updates.append("phase_detail = ?")
+            params.append(phase_detail)
+
+        if chunks_processed is not None:
+            updates.append("chunks_processed = ?")
+            params.append(chunks_processed)
+
+        if chunks_total is not None:
+            updates.append("chunks_total = ?")
+            params.append(chunks_total)
+
+        if status in ("completed", "failed", "cancelled"):
+            updates.append("completed_at = ?")
+            params.append(datetime.utcnow().isoformat())
+
+        if not updates:
+            return
+
+        params.append(job_id)
+        query = f"UPDATE upload_jobs SET {', '.join(updates)} WHERE id = ?"
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(query, params)
+            conn.commit()
+
+    def get_upload_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+        """Get upload job status.
+
+        Args:
+            job_id: Job ID
+
+        Returns:
+            Job details or None if not found
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT id, collection_id, status, total_files, processed_files,
+                       current_file, error, started_at, completed_at, result_summary,
+                       phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                FROM upload_jobs
+                WHERE id = ?
+                """,
+                (job_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+    def get_active_upload_job(self, collection_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get currently active (pending/running) upload job.
+
+        Args:
+            collection_id: Optional collection to filter by
+
+        Returns:
+            Active job details or None
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            if collection_id:
+                cursor = conn.execute(
+                    """
+                    SELECT id, collection_id, status, total_files, processed_files,
+                           current_file, error, started_at, completed_at, result_summary,
+                           phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                    FROM upload_jobs
+                    WHERE status IN ('pending', 'running') AND collection_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (collection_id,)
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT id, collection_id, status, total_files, processed_files,
+                           current_file, error, started_at, completed_at, result_summary,
+                           phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                    FROM upload_jobs
+                    WHERE status IN ('pending', 'running')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+
+    def get_all_active_upload_jobs(self) -> List[Dict[str, Any]]:
+        """Get all active (pending/running) upload jobs.
+
+        Returns:
+            List of active job details
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT id, collection_id, status, total_files, processed_files,
+                       current_file, error, started_at, completed_at, result_summary,
+                       phase, phase_progress, phase_detail, chunks_processed, chunks_total, job_type
+                FROM upload_jobs
+                WHERE status IN ('pending', 'running')
+                ORDER BY id DESC
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     # AI Preferences methods
     def get_ai_preferences(self) -> Optional[Dict[str, Any]]:

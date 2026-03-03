@@ -24,8 +24,9 @@ class EmbeddingService:
         logger.info(f"Loading embedding model: {model_name}")
 
         # Try to load the model, with helpful error messages for SSL issues
+        # trust_remote_code=True is needed for models like nomic-ai/nomic-embed-text-v1.5
         try:
-            self.model = SentenceTransformer(model_name)
+            self.model = SentenceTransformer(model_name, trust_remote_code=True)
         except Exception as e:
             error_msg = str(e).lower()
             if 'ssl' in error_msg or 'certificate' in error_msg:

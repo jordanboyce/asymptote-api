@@ -15,12 +15,20 @@ from services.code_extractor import (
     SUPPORTED_CODE_EXTENSIONS, is_code_file
 )
 
+# OCR engine abstraction
+from services.ocr_engine import (
+    OCREngine, OCRResult, create_ocr_engine,
+    is_scanned_pdf as check_scanned_pdf, get_available_engines
+)
+
 logger = logging.getLogger(__name__)
 
 # OCR availability flags (set during initialization)
 PYTESSERACT_AVAILABLE = False
 EASYOCR_AVAILABLE = False
 PDF2IMAGE_AVAILABLE = False
+MARKER_AVAILABLE = False
+DOCLING_AVAILABLE = False
 
 try:
     import pytesseract
@@ -38,6 +46,18 @@ except ImportError:
 try:
     from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    from marker.converters.pdf import PdfConverter
+    MARKER_AVAILABLE = True
+except ImportError:
+    pass
+
+try:
+    from docling.document_converter import DocumentConverter
+    DOCLING_AVAILABLE = True
 except ImportError:
     pass
 
@@ -79,26 +99,36 @@ class ExtractionResult:
 
 
 class DocumentExtractor:
-    """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON) and code files."""
+    """Extracts text from various document formats (PDF, TXT, DOCX, CSV, MD, JSON, JSONL) and code files."""
 
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
 
-    def __init__(self, enable_ocr: bool = False, ocr_engine: str = "pytesseract",
-                 ocr_language: str = "eng", ocr_fallback_only: bool = True):
+    def __init__(self, enable_ocr: bool = False, ocr_engine: str = "auto",
+                 ocr_language: str = "eng", ocr_fallback_only: bool = True,
+                 ocr_char_threshold: int = 100, ocr_max_pages: int = 25,
+                 ocr_max_file_mb: int = 50):
         """
         Initialize the document extractor.
 
         Args:
             enable_ocr: Whether to enable OCR for scanned PDFs
-            ocr_engine: OCR engine to use ("pytesseract" or "easyocr")
+            ocr_engine: OCR engine to use - "auto", "marker", "docling",
+                        "pytesseract", or "easyocr"
             ocr_language: Language code for OCR (e.g., "eng", "eng+fra")
             ocr_fallback_only: Only use OCR when text extraction fails/empty
+            ocr_char_threshold: Minimum chars per page to consider as text-based
+            ocr_max_pages: Skip OCR for PDFs with more pages than this (0 = no limit)
+            ocr_max_file_mb: Skip OCR for files larger than this in MB (0 = no limit)
         """
         self.enable_ocr = enable_ocr
         self.ocr_engine = ocr_engine
         self.ocr_language = ocr_language
         self.ocr_fallback_only = ocr_fallback_only
+        self.ocr_char_threshold = ocr_char_threshold
+        self.ocr_max_pages = ocr_max_pages
+        self.ocr_max_file_mb = ocr_max_file_mb
         self._easyocr_reader = None
+        self._ocr_engine_instance = None
         self._code_extractor = CodeExtractor()
 
         if enable_ocr:
@@ -106,23 +136,56 @@ class DocumentExtractor:
 
     def _validate_ocr_setup(self):
         """Validate OCR dependencies are available."""
-        if not PDF2IMAGE_AVAILABLE:
+        available = get_available_engines()
+        logger.info(f"Available OCR engines: {available}")
+
+        if not available:
             logger.warning(
-                "OCR enabled but pdf2image not installed. "
-                "Install with: pip install pdf2image"
+                "OCR enabled but no OCR engines are installed. "
+                "Install one of: pip install marker-pdf, pip install docling, "
+                "or pip install pytesseract pdf2image pillow"
             )
             return
 
-        if self.ocr_engine == "pytesseract" and not PYTESSERACT_AVAILABLE:
+        # For auto mode, we'll select at runtime
+        if self.ocr_engine == "auto":
+            logger.info("OCR engine set to auto - will select best available at runtime")
+            return
+
+        # Check if requested engine is available
+        engine_available = {
+            "marker": MARKER_AVAILABLE,
+            "docling": DOCLING_AVAILABLE,
+            "pytesseract": PYTESSERACT_AVAILABLE and PDF2IMAGE_AVAILABLE,
+            "easyocr": EASYOCR_AVAILABLE and PDF2IMAGE_AVAILABLE
+        }
+
+        if not engine_available.get(self.ocr_engine, False):
             logger.warning(
-                "pytesseract OCR engine selected but not installed. "
-                "Install with: pip install pytesseract pillow"
+                f"OCR engine '{self.ocr_engine}' selected but not available. "
+                f"Available engines: {available}"
             )
-        elif self.ocr_engine == "easyocr" and not EASYOCR_AVAILABLE:
-            logger.warning(
-                "easyocr OCR engine selected but not installed. "
-                "Install with: pip install easyocr"
+
+    def _get_ocr_engine(self) -> Optional[OCREngine]:
+        """Get or create the OCR engine instance."""
+        if self._ocr_engine_instance is None:
+            # Try to create the engine with the configured settings
+            kwargs = {}
+            if self.ocr_engine in ("pytesseract", "easyocr"):
+                kwargs["language"] = self.ocr_language
+
+            self._ocr_engine_instance = create_ocr_engine(
+                engine_name=self.ocr_engine,
+                fallback=True,
+                **kwargs
             )
+
+            if self._ocr_engine_instance:
+                logger.info(f"Using OCR engine: {self._ocr_engine_instance.name}")
+            else:
+                logger.warning("No OCR engine available")
+
+        return self._ocr_engine_instance
 
     def _get_easyocr_reader(self):
         """Lazily initialize EasyOCR reader."""
@@ -174,6 +237,8 @@ class DocumentExtractor:
             return ExtractionResult(self._extract_markdown(file_path), method="text")
         elif file_ext == '.json':
             return ExtractionResult(self._extract_json(file_path), method="text")
+        elif file_ext == '.jsonl':
+            return ExtractionResult(self._extract_jsonl(file_path), method="text")
         elif is_code_file(str(file_path)):
             return self._extract_code(file_path)
         else:
@@ -204,8 +269,32 @@ class DocumentExtractor:
 
         # Check if we need OCR (no text extracted or mostly empty pages)
         if self.enable_ocr:
+            # Check page count limit (OCR is meant for small scanned docs, not books)
+            num_pages = len(page_texts) if page_texts else self._get_pdf_page_count(pdf_path)
+            if self.ocr_max_pages > 0 and num_pages > self.ocr_max_pages:
+                logger.info(
+                    f"Skipping OCR for {pdf_path.name}: {num_pages} pages exceeds limit of {self.ocr_max_pages}. "
+                    f"OCR is intended for small scanned documents (receipts, forms), not books/manuals."
+                )
+                if not page_texts:
+                    raise Exception(f"Failed to extract text from PDF {pdf_path.name}: text extraction failed and OCR skipped (too many pages)")
+                return ExtractionResult(page_texts, method="text")
+
+            # Check file size limit
+            file_size_mb = pdf_path.stat().st_size / (1024 * 1024)
+            if self.ocr_max_file_mb > 0 and file_size_mb > self.ocr_max_file_mb:
+                logger.info(
+                    f"Skipping OCR for {pdf_path.name}: {file_size_mb:.1f}MB exceeds limit of {self.ocr_max_file_mb}MB. "
+                    f"OCR is intended for small scanned documents."
+                )
+                if not page_texts:
+                    raise Exception(f"Failed to extract text from PDF {pdf_path.name}: text extraction failed and OCR skipped (file too large)")
+                return ExtractionResult(page_texts, method="text")
+
+            # Use configurable threshold for detecting empty/scanned pages
+            char_threshold = self.ocr_char_threshold
             empty_pages = [p for p, text in page_texts.items()
-                          if not text or len(text.strip()) < 50]
+                          if not text or len(text.strip()) < char_threshold]
 
             should_ocr = False
             if not page_texts:
@@ -230,13 +319,33 @@ class DocumentExtractor:
 
                         if ocr_pages:
                             method = "hybrid" if any(p not in ocr_pages for p in page_texts.keys()) else "ocr"
+                except MemoryError:
+                    logger.error(f"OCR out of memory for {pdf_path.name}. Consider disabling OCR or using pytesseract instead of docling/marker.")
                 except Exception as e:
-                    logger.warning(f"OCR failed for {pdf_path.name}: {e}")
+                    # Check for common memory-related errors from native libraries
+                    error_str = str(e).lower()
+                    if 'bad_alloc' in error_str or 'memory' in error_str or 'oom' in error_str:
+                        logger.error(f"OCR memory allocation failed for {pdf_path.name}: {e}. Consider disabling OCR in settings.")
+                    else:
+                        logger.warning(f"OCR failed for {pdf_path.name}: {e}")
 
         if not page_texts:
             raise Exception(f"Failed to extract text from PDF {pdf_path.name}: all methods failed")
 
         return ExtractionResult(page_texts, method=method, ocr_pages=ocr_pages)
+
+    def _get_pdf_page_count(self, pdf_path: Path) -> int:
+        """Get the number of pages in a PDF without extracting text."""
+        try:
+            reader = PdfReader(str(pdf_path))
+            return len(reader.pages)
+        except Exception:
+            # Fallback: try pdfplumber
+            try:
+                with pdfplumber.open(pdf_path) as pdf:
+                    return len(pdf.pages)
+            except Exception:
+                return 0
 
     def _extract_pdf_with_pdfplumber(self, pdf_path: Path) -> Dict[int, str]:
         """Extract text using pdfplumber (handles complex layouts better)."""
@@ -266,6 +375,48 @@ class DocumentExtractor:
         """
         Extract text from PDF using OCR.
 
+        Supports multiple OCR backends:
+        - marker: VLM-based, best accuracy (requires marker-pdf)
+        - docling: IBM toolkit, good for complex layouts (requires docling)
+        - pytesseract/easyocr: Legacy OCR (requires pdf2image + tesseract/easyocr)
+
+        Args:
+            pdf_path: Path to PDF file
+            pages_to_ocr: Specific page numbers to OCR (None = all pages)
+
+        Returns:
+            Tuple of (page_texts dict, list of OCR'd page numbers) or None if OCR fails
+        """
+        # Try VLM-based OCR engines first (marker, docling)
+        # These process the whole PDF at once and return better results
+        if self.ocr_engine in ("auto", "marker", "docling"):
+            ocr_engine = self._get_ocr_engine()
+            if ocr_engine and ocr_engine.name in ("marker", "docling"):
+                try:
+                    logger.info(f"Running {ocr_engine.name} OCR on {pdf_path.name}")
+                    result = ocr_engine.extract_text(str(pdf_path))
+
+                    # VLM engines return full document, not per-page
+                    # We'll return it as page 1 for compatibility
+                    page_texts = result.to_page_dict()
+                    ocr_pages = list(page_texts.keys())
+
+                    total_chars = sum(len(t) for t in page_texts.values())
+                    logger.info(f"OCR extracted {total_chars} chars from {len(ocr_pages)} page(s)")
+
+                    return page_texts, ocr_pages
+                except Exception as e:
+                    logger.warning(f"{ocr_engine.name} OCR failed: {e}, trying fallback...")
+
+        # Fallback to legacy page-by-page OCR
+        return self._extract_pdf_with_legacy_ocr(pdf_path, pages_to_ocr)
+
+    def _extract_pdf_with_legacy_ocr(self, pdf_path: Path,
+                                      pages_to_ocr: Optional[List[int]] = None
+                                      ) -> Optional[Tuple[Dict[int, str], List[int]]]:
+        """
+        Extract text from PDF using legacy page-by-page OCR (pytesseract/easyocr).
+
         Args:
             pdf_path: Path to PDF file
             pages_to_ocr: Specific page numbers to OCR (None = all pages)
@@ -274,18 +425,30 @@ class DocumentExtractor:
             Tuple of (page_texts dict, list of OCR'd page numbers) or None if OCR fails
         """
         if not PDF2IMAGE_AVAILABLE:
-            logger.warning("pdf2image not available for OCR")
+            logger.warning("pdf2image not available for legacy OCR")
             return None
 
-        if self.ocr_engine == "pytesseract" and not PYTESSERACT_AVAILABLE:
+        # Determine which legacy engine to use
+        engine = self.ocr_engine
+        if engine in ("auto", "marker", "docling"):
+            # VLM engines failed or unavailable, pick a legacy fallback
+            if PYTESSERACT_AVAILABLE:
+                engine = "pytesseract"
+            elif EASYOCR_AVAILABLE:
+                engine = "easyocr"
+            else:
+                logger.warning("No legacy OCR engine available")
+                return None
+
+        if engine == "pytesseract" and not PYTESSERACT_AVAILABLE:
             logger.warning("pytesseract not available for OCR")
             return None
 
-        if self.ocr_engine == "easyocr" and not EASYOCR_AVAILABLE:
+        if engine == "easyocr" and not EASYOCR_AVAILABLE:
             logger.warning("easyocr not available for OCR")
             return None
 
-        logger.info(f"Running OCR on {pdf_path.name} using {self.ocr_engine}")
+        logger.info(f"Running legacy OCR on {pdf_path.name} using {engine}")
 
         try:
             from pdf2image import convert_from_path
@@ -301,7 +464,7 @@ class DocumentExtractor:
                 if pages_to_ocr is not None and page_num not in pages_to_ocr:
                     continue
 
-                text = self._ocr_image(image)
+                text = self._ocr_image(image, engine)
                 if text:
                     page_texts[page_num] = text
                     ocr_pages.append(page_num)
@@ -310,25 +473,28 @@ class DocumentExtractor:
             return page_texts, ocr_pages
 
         except Exception as e:
-            logger.error(f"OCR failed for {pdf_path.name}: {e}")
+            logger.error(f"Legacy OCR failed for {pdf_path.name}: {e}")
             return None
 
-    def _ocr_image(self, image) -> str:
+    def _ocr_image(self, image, engine: str = None) -> str:
         """
-        Run OCR on a single image.
+        Run OCR on a single image using a legacy OCR engine.
 
         Args:
             image: PIL Image object
+            engine: OCR engine to use ("pytesseract" or "easyocr")
 
         Returns:
             Extracted text string
         """
-        if self.ocr_engine == "pytesseract":
+        engine = engine or self.ocr_engine
+
+        if engine == "pytesseract":
             import pytesseract
             text = pytesseract.image_to_string(image, lang=self.ocr_language)
             return text.strip()
 
-        elif self.ocr_engine == "easyocr":
+        elif engine == "easyocr":
             import numpy as np
             reader = self._get_easyocr_reader()
             # Convert PIL Image to numpy array
@@ -342,13 +508,21 @@ class DocumentExtractor:
 
     def is_ocr_available(self) -> bool:
         """Check if OCR is available with current configuration."""
-        if not PDF2IMAGE_AVAILABLE:
+        available_engines = get_available_engines()
+        if not available_engines:
             return False
-        if self.ocr_engine == "pytesseract":
-            return PYTESSERACT_AVAILABLE
-        if self.ocr_engine == "easyocr":
-            return EASYOCR_AVAILABLE
-        return False
+
+        if self.ocr_engine == "auto":
+            return True  # Auto will pick the best available
+
+        return self.ocr_engine in available_engines or any(
+            e in available_engines for e in ["marker", "docling", "pytesseract", "easyocr"]
+        )
+
+    def get_ocr_engine_name(self) -> Optional[str]:
+        """Get the name of the active OCR engine."""
+        engine = self._get_ocr_engine()
+        return engine.name if engine else None
 
     def _extract_txt(self, txt_path: Path) -> Dict[int, str]:
         """
@@ -615,6 +789,59 @@ class DocumentExtractor:
         else:
             # Primitive value
             page_texts[1] = str(data)
+
+        return page_texts
+
+    def _extract_jsonl(self, jsonl_path: Path) -> Dict[int, str]:
+        """
+        Extract text from JSON Lines file (one JSON object per line).
+
+        Returns:
+            Dictionary with sections (every ~10 lines = 1 section)
+        """
+        import json
+
+        lines = []
+        try:
+            with open(jsonl_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        # Format as JSON for readability
+                        formatted = json.dumps(data, indent=2) if isinstance(data, (dict, list)) else str(data)
+                        lines.append(f"[{line_num}]: {formatted}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Skipping invalid JSON at line {line_num} in {jsonl_path.name}: {e}")
+                        lines.append(f"[{line_num}]: {line}")
+        except UnicodeDecodeError:
+            logger.warning(f"UTF-8 decoding failed for {jsonl_path.name}, trying latin-1")
+            with open(jsonl_path, 'r', encoding='latin-1') as f:
+                for line_num, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        formatted = json.dumps(data, indent=2) if isinstance(data, (dict, list)) else str(data)
+                        lines.append(f"[{line_num}]: {formatted}")
+                    except json.JSONDecodeError:
+                        lines.append(f"[{line_num}]: {line}")
+
+        if not lines:
+            logger.warning(f"Empty JSONL file: {jsonl_path.name}")
+            return {1: ""}
+
+        # Group lines into sections (10 lines per section)
+        items_per_page = 10
+        page_texts = {}
+
+        for start_idx in range(0, len(lines), items_per_page):
+            page_num = (start_idx // items_per_page) + 1
+            end_idx = min(start_idx + items_per_page, len(lines))
+            page_texts[page_num] = "\n\n".join(lines[start_idx:end_idx])
 
         return page_texts
 

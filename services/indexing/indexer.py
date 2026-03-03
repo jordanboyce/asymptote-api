@@ -1,7 +1,7 @@
 """Document indexing orchestration service."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Callable
 import hashlib
 import logging
 from datetime import datetime
@@ -12,6 +12,7 @@ from models.schemas import (
     AIOptions,
     AIUsage,
     AIUsageDetail,
+    SearchMode,
 )
 from services.document_extractor import DocumentExtractor, ExtractionResult
 from services.chunker import TextChunker
@@ -19,6 +20,10 @@ from services.embedder import EmbeddingService
 from services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+
+# Type alias for progress callback
+# Signature: (phase: str, progress: int, detail: str, chunks_done: int, chunks_total: int)
+ProgressCallback = Callable[[str, int, Optional[str], int, int], None]
 
 
 class DocumentIndexer:
@@ -56,7 +61,37 @@ class DocumentIndexer:
         Returns:
             DocumentMetadata object
         """
+        # Delegate to progress-aware version with no-op callback
+        return self.index_document_with_progress(document_path, filename, progress_callback=None)
+
+    def index_document_with_progress(
+        self,
+        document_path: Path,
+        filename: str,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> DocumentMetadata:
+        """
+        Index a single document with granular progress reporting (v4.0).
+
+        Args:
+            document_path: Path to the document file
+            filename: Original filename
+            progress_callback: Optional callback for progress updates
+                Signature: (phase, progress, detail, chunks_done, chunks_total)
+
+        Returns:
+            DocumentMetadata object
+        """
         logger.info(f"Indexing document: {filename}")
+
+        def report(phase: str, progress: int, detail: str = None,
+                   chunks_done: int = 0, chunks_total: int = 0):
+            """Helper to safely call progress callback."""
+            if progress_callback:
+                try:
+                    progress_callback(phase, progress, detail, chunks_done, chunks_total)
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
 
         # Generate document ID from file content hash
         document_id = self._generate_document_id(document_path)
@@ -68,7 +103,8 @@ class DocumentIndexer:
         if source_format == "csv" and settings.csv_row_level_indexing:
             return self._index_csv_rows(document_path, filename, document_id)
 
-        # Extract text from document
+        # Phase 1: Extract text from document
+        report("extracting", 0, f"Extracting text from {filename}")
         logger.debug(f"Extracting text from {filename}")
         extraction_result = self.document_extractor.extract_text(document_path)
 
@@ -82,12 +118,14 @@ class DocumentIndexer:
             extraction_method = "text"
 
         num_pages = len(page_texts)
+        report("extracting", 100, f"Extracted {num_pages} pages")
 
         if num_pages == 0:
             logger.warning(f"No pages extracted from {filename}")
             raise ValueError(f"Could not extract any pages from {filename}")
 
-        # Chunk the text with format metadata
+        # Phase 2: Chunk the text with format metadata
+        report("chunking", 0, f"Chunking {num_pages} pages")
         logger.debug(f"Chunking text from {filename}")
         chunks = self.text_chunker.chunk_document(
             page_texts=page_texts,
@@ -98,18 +136,55 @@ class DocumentIndexer:
         )
 
         num_chunks = len(chunks)
+        report("chunking", 100, f"Created {num_chunks} chunks", 0, num_chunks)
+
         if num_chunks == 0:
             logger.warning(f"No chunks created from {filename}")
             raise ValueError(f"Could not create any chunks from {filename}")
 
-        # Generate embeddings
+        # Phase 3: Generate embeddings (with progress for large files)
+        report("embedding", 0, f"Generating embeddings for {num_chunks} chunks", 0, num_chunks)
         logger.debug(f"Generating embeddings for {num_chunks} chunks")
-        chunk_texts = [chunk.text for chunk in chunks]
-        embeddings = self.embedding_service.embed_texts(chunk_texts)
 
-        # Add to vector store
+        chunk_texts = [chunk.text for chunk in chunks]
+
+        # For large files, embed in batches with progress updates
+        batch_size = 32  # Match embedding service batch size
+        if num_chunks > batch_size and progress_callback:
+            embeddings = []
+            for i in range(0, num_chunks, batch_size):
+                batch = chunk_texts[i:i + batch_size]
+                batch_embeddings = self.embedding_service.embed_texts(batch)
+                embeddings.extend(batch_embeddings)
+
+                progress = min(100, int((i + len(batch)) / num_chunks * 100))
+                report("embedding", progress,
+                       f"Embedded {min(i + len(batch), num_chunks)}/{num_chunks} chunks",
+                       min(i + len(batch), num_chunks), num_chunks)
+        else:
+            embeddings = self.embedding_service.embed_texts(chunk_texts)
+            report("embedding", 100, f"Embedded {num_chunks} chunks", num_chunks, num_chunks)
+
+        # Phase 4: Add to vector store
+        report("saving", 0, f"Saving {num_chunks} chunks to index")
         logger.debug(f"Adding {num_chunks} chunks to vector store")
         self.vector_store.add_chunks(chunks, embeddings)
+
+        # Add document record to metadata store
+        indexed_at = datetime.utcnow().isoformat()
+        self.vector_store.metadata_store.add_document(
+            document_id=document_id,
+            filename=filename,
+            num_pages=num_pages,
+            num_chunks=num_chunks,
+            upload_timestamp=indexed_at,
+            source_format=source_format,
+            extraction_method=extraction_method,
+            embedding_model=settings.embedding_model,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        )
+        report("saving", 100, f"Saved {num_chunks} chunks")
 
         # Create metadata with v3.0 fields
         metadata = DocumentMetadata(
@@ -117,7 +192,7 @@ class DocumentIndexer:
             filename=filename,
             total_pages=num_pages,
             total_chunks=num_chunks,
-            indexed_at=datetime.utcnow().isoformat(),
+            indexed_at=indexed_at,
             source_format=source_format,
             extraction_method=extraction_method,
             embedding_model=settings.embedding_model,
@@ -174,13 +249,28 @@ class DocumentIndexer:
         logger.debug(f"Adding {num_chunks} CSV chunks to vector store")
         self.vector_store.add_chunks(chunks, embeddings)
 
+        # Add document record to metadata store
+        indexed_at = datetime.utcnow().isoformat()
+        self.vector_store.metadata_store.add_document(
+            document_id=document_id,
+            filename=filename,
+            num_pages=num_rows,  # For CSV, "pages" = rows
+            num_chunks=num_chunks,
+            upload_timestamp=indexed_at,
+            source_format="csv",
+            extraction_method="text",
+            embedding_model=settings.embedding_model,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+        )
+
         # Create metadata
         metadata = DocumentMetadata(
             document_id=document_id,
             filename=filename,
             total_pages=num_rows,  # For CSV, "pages" = rows
             total_chunks=num_chunks,
-            indexed_at=datetime.utcnow().isoformat(),
+            indexed_at=indexed_at,
             source_format="csv",
             extraction_method="text",
             embedding_model=settings.embedding_model,
@@ -197,6 +287,8 @@ class DocumentIndexer:
         top_k: int = 10,
         ai_service=None,
         ai_options: Optional[AIOptions] = None,
+        mode: SearchMode = SearchMode.SEMANTIC,
+        semantic_weight: float = 0.7,
     ) -> dict:
         """
         Search for documents matching the query, with optional AI enhancements.
@@ -206,22 +298,39 @@ class DocumentIndexer:
             top_k: Number of results to return
             ai_service: Optional AIService instance (created from user's API key)
             ai_options: Optional AI feature flags
+            mode: Search mode (semantic, keyword, or hybrid)
+            semantic_weight: Weight for semantic search in hybrid mode (0-1)
 
         Returns:
             Dict with 'results', and optionally 'enhanced_query', 'synthesis', 'ai_usage'
         """
-        logger.info(f"Searching for: {query[:100]}")
+        logger.info(f"Searching for: {query[:100]} (mode={mode.value})")
 
         ai_active = ai_service and ai_options
         ai_usage = AIUsage() if ai_active else None
         synthesis = None
 
-        # Step 1: Generate query embedding and search
-        query_embedding = self.embedding_service.embed_query(query)
-
         # Fetch extra results if reranking (so the LLM has a bigger pool)
         fetch_k = min(top_k * 5, 50) if (ai_active and ai_options.rerank) else top_k
-        results = self.vector_store.search(query_embedding, top_k=fetch_k)
+
+        # Perform search based on mode
+        if mode == SearchMode.KEYWORD:
+            # Pure BM25 keyword search
+            bm25_results = self.vector_store.bm25_index.search(query, fetch_k)
+            results = self._bm25_to_search_results(bm25_results)
+        elif mode == SearchMode.HYBRID:
+            # Combined semantic + keyword search
+            query_embedding = self.embedding_service.embed_query(query)
+            results = self.vector_store.search_hybrid(
+                query=query,
+                query_embedding=query_embedding,
+                top_k=fetch_k,
+                semantic_weight=semantic_weight,
+            )
+        else:
+            # Default: pure semantic search
+            query_embedding = self.embedding_service.embed_query(query)
+            results = self.vector_store.search(query_embedding, top_k=fetch_k)
 
         # Step 3: Optionally rerank results
         if ai_active and ai_options.rerank and len(results) > 0:
@@ -332,3 +441,60 @@ class DocumentIndexer:
                 hasher.update(chunk)
 
         return hasher.hexdigest()[:16]  # Use first 16 characters
+
+    def _bm25_to_search_results(self, bm25_results: list) -> list:
+        """
+        Convert BM25 results (chunk_id, score) to SearchResult objects.
+
+        Args:
+            bm25_results: List of (chunk_id, score) tuples from BM25 search
+
+        Returns:
+            List of SearchResult objects
+        """
+        from models.schemas import SearchResult
+
+        if not bm25_results:
+            return []
+
+        # Normalize scores to 0-1 range
+        max_score = max(score for _, score in bm25_results) if bm25_results else 1
+        if max_score == 0:
+            max_score = 1
+
+        results = []
+        # Get all chunks to find by chunk_id
+        all_chunks = self.vector_store.metadata_store.get_all_chunks_ordered()
+        chunk_lookup = {chunk["chunk_id"]: chunk for chunk in all_chunks}
+
+        for chunk_id, score in bm25_results:
+            chunk = chunk_lookup.get(chunk_id)
+            if not chunk:
+                continue
+
+            # Get document info for source_type
+            doc_info = self.vector_store.metadata_store.get_document_info(chunk["document_id"])
+            source_type = doc_info.get("source_type") if doc_info else None
+            source_path = doc_info.get("source_path") if doc_info else None
+
+            result = SearchResult(
+                filename=chunk["filename"],
+                page_number=chunk["page_number"],
+                text_snippet=chunk["text"],
+                similarity_score=score / max_score,  # Normalize to 0-1
+                document_id=chunk["document_id"],
+                chunk_id=chunk["chunk_id"],
+                pdf_url="",
+                page_url="",
+                source_format=chunk.get("source_format"),
+                extraction_method=chunk.get("extraction_method"),
+                csv_row_number=chunk.get("csv_row_number"),
+                csv_columns=chunk.get("csv_columns"),
+                csv_values=chunk.get("csv_values"),
+                # v3.1: Local file reference support
+                source_type=source_type,
+                source_path=source_path,
+            )
+            results.append(result)
+
+        return results

@@ -1,8 +1,13 @@
-"""Code extractor for Pascal/Delphi/Modula-2/Assembly source files.
+"""Code extractor for source files across multiple programming languages.
 
 This module provides intelligent code-aware text extraction and chunking
-for legacy codebases, preserving symbol boundaries and extracting metadata
-useful for RAG-based code understanding and modernization.
+for codebases, preserving symbol boundaries and extracting metadata
+useful for RAG-based code understanding.
+
+Supported languages:
+- Curly-brace: JavaScript, TypeScript, C#, Java, Go, Rust, C, C++, PHP, Swift, Kotlin
+- Indentation-based: Python, Ruby
+- Legacy: Pascal, Delphi, Modula-2, Assembly
 """
 
 import re
@@ -14,10 +19,27 @@ from enum import Enum
 
 class CodeLanguage(Enum):
     """Supported code languages."""
+    # Modern languages
+    PYTHON = "python"
+    JAVASCRIPT = "javascript"
+    TYPESCRIPT = "typescript"
+    CSHARP = "csharp"
+    JAVA = "java"
+    GO = "go"
+    RUST = "rust"
+    C = "c"
+    CPP = "cpp"
+    PHP = "php"
+    RUBY = "ruby"
+    SWIFT = "swift"
+    KOTLIN = "kotlin"
+    SCALA = "scala"
+    # Legacy languages
     PASCAL = "pascal"
     DELPHI = "delphi"
     MODULA2 = "modula2"
     ASSEMBLY = "assembly"
+    # Fallback
     UNKNOWN = "unknown"
 
 
@@ -56,10 +78,55 @@ class CodeChunk:
 
 
 class CodeExtractor:
-    """Extracts and chunks code from Pascal/Delphi/Modula-2/Assembly files."""
+    """Extracts and chunks code from various programming language files."""
 
     # File extension to language mapping
     EXTENSION_MAP = {
+        # Python
+        '.py': CodeLanguage.PYTHON,
+        '.pyw': CodeLanguage.PYTHON,
+        '.pyi': CodeLanguage.PYTHON,  # Type stubs
+        # JavaScript/TypeScript
+        '.js': CodeLanguage.JAVASCRIPT,
+        '.jsx': CodeLanguage.JAVASCRIPT,
+        '.mjs': CodeLanguage.JAVASCRIPT,
+        '.cjs': CodeLanguage.JAVASCRIPT,
+        '.ts': CodeLanguage.TYPESCRIPT,
+        '.tsx': CodeLanguage.TYPESCRIPT,
+        '.mts': CodeLanguage.TYPESCRIPT,
+        '.cts': CodeLanguage.TYPESCRIPT,
+        # C#
+        '.cs': CodeLanguage.CSHARP,
+        # Java
+        '.java': CodeLanguage.JAVA,
+        # Go
+        '.go': CodeLanguage.GO,
+        # Rust
+        '.rs': CodeLanguage.RUST,
+        # C/C++
+        '.c': CodeLanguage.C,
+        '.h': CodeLanguage.C,
+        '.cpp': CodeLanguage.CPP,
+        '.cxx': CodeLanguage.CPP,
+        '.cc': CodeLanguage.CPP,
+        '.hpp': CodeLanguage.CPP,
+        '.hxx': CodeLanguage.CPP,
+        '.hh': CodeLanguage.CPP,
+        # PHP
+        '.php': CodeLanguage.PHP,
+        '.phtml': CodeLanguage.PHP,
+        # Ruby
+        '.rb': CodeLanguage.RUBY,
+        '.rake': CodeLanguage.RUBY,
+        '.gemspec': CodeLanguage.RUBY,
+        # Swift
+        '.swift': CodeLanguage.SWIFT,
+        # Kotlin
+        '.kt': CodeLanguage.KOTLIN,
+        '.kts': CodeLanguage.KOTLIN,
+        # Scala
+        '.scala': CodeLanguage.SCALA,
+        '.sc': CodeLanguage.SCALA,
         # Pascal/Delphi
         '.pas': CodeLanguage.DELPHI,
         '.dpr': CodeLanguage.DELPHI,  # Delphi project
@@ -74,7 +141,6 @@ class CodeExtractor:
         # Assembly
         '.asm': CodeLanguage.ASSEMBLY,
         '.s': CodeLanguage.ASSEMBLY,
-        '.inc': CodeLanguage.DELPHI,  # Could be assembly include too
     }
 
     # Patterns for Pascal/Delphi
@@ -209,6 +275,160 @@ class CodeExtractor:
         ),
     }
 
+    # Patterns for Python
+    PYTHON_PATTERNS = {
+        'class': re.compile(
+            r'^(\s*)class\s+(\w+)\s*(?:\([^)]*\))?\s*:',
+            re.MULTILINE
+        ),
+        'function': re.compile(
+            r'^(\s*)(?:async\s+)?def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:',
+            re.MULTILINE
+        ),
+        'method': re.compile(
+            r'^(\s+)(?:async\s+)?def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:',
+            re.MULTILINE
+        ),
+    }
+
+    # Patterns for curly-brace languages (JS/TS/C#/Java/Go/Rust/C/C++/PHP/Swift/Kotlin/Scala)
+    CURLY_BRACE_PATTERNS = {
+        # JavaScript/TypeScript
+        'js_function': re.compile(
+            r'^(\s*)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'js_arrow': re.compile(
+            r'^(\s*)(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>',
+            re.MULTILINE
+        ),
+        'js_class': re.compile(
+            r'^(\s*)(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+\w+)?(?:\s+implements\s+[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'js_method': re.compile(
+            r'^(\s+)(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        # TypeScript interface/type
+        'ts_interface': re.compile(
+            r'^(\s*)(?:export\s+)?interface\s+(\w+)(?:<[^>]*>)?(?:\s+extends\s+[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'ts_type': re.compile(
+            r'^(\s*)(?:export\s+)?type\s+(\w+)(?:<[^>]*>)?\s*=',
+            re.MULTILINE
+        ),
+        # C#/Java
+        'csharp_class': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|static|abstract|sealed|partial|\s)*class\s+(\w+)(?:<[^>]*>)?(?:\s*:\s*[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'csharp_interface': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|\s)*interface\s+(\w+)(?:<[^>]*>)?(?:\s*:\s*[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'csharp_method': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|static|virtual|override|abstract|async|\s)*(?:\w+(?:<[^>]*>)?(?:\[\])?)\s+(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?:where\s+[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'csharp_property': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|static|virtual|override|abstract|\s)*(?:\w+(?:<[^>]*>)?(?:\[\])?)\s+(\w+)\s*\{\s*(?:get|set)',
+            re.MULTILINE
+        ),
+        # Go
+        'go_func': re.compile(
+            r'^func\s+(?:\([^)]+\)\s+)?(\w+)\s*(?:\[[^\]]*\])?\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'go_type': re.compile(
+            r'^type\s+(\w+)\s+(?:struct|interface)\s*\{',
+            re.MULTILINE
+        ),
+        # Rust
+        'rust_fn': re.compile(
+            r'^(\s*)(?:pub\s+)?(?:async\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'rust_struct': re.compile(
+            r'^(\s*)(?:pub\s+)?struct\s+(\w+)(?:<[^>]*>)?',
+            re.MULTILINE
+        ),
+        'rust_impl': re.compile(
+            r'^(\s*)impl(?:<[^>]*>)?\s+(?:\w+\s+for\s+)?(\w+)(?:<[^>]*>)?\s*\{',
+            re.MULTILINE
+        ),
+        'rust_trait': re.compile(
+            r'^(\s*)(?:pub\s+)?trait\s+(\w+)(?:<[^>]*>)?\s*\{',
+            re.MULTILINE
+        ),
+        'rust_enum': re.compile(
+            r'^(\s*)(?:pub\s+)?enum\s+(\w+)(?:<[^>]*>)?\s*\{',
+            re.MULTILINE
+        ),
+        # PHP
+        'php_function': re.compile(
+            r'^(\s*)(?:public|private|protected|static|\s)*function\s+(\w+)\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'php_class': re.compile(
+            r'^(\s*)(?:abstract|final|\s)*class\s+(\w+)(?:\s+extends\s+\w+)?(?:\s+implements\s+[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        # Ruby
+        'ruby_class': re.compile(
+            r'^(\s*)class\s+(\w+)(?:\s*<\s*\w+)?',
+            re.MULTILINE
+        ),
+        'ruby_module': re.compile(
+            r'^(\s*)module\s+(\w+)',
+            re.MULTILINE
+        ),
+        'ruby_def': re.compile(
+            r'^(\s*)def\s+(?:self\.)?(\w+[?!=]?)',
+            re.MULTILINE
+        ),
+        # Swift
+        'swift_func': re.compile(
+            r'^(\s*)(?:public|private|internal|open|fileprivate|static|class|\s)*func\s+(\w+)(?:<[^>]*>)?\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'swift_class': re.compile(
+            r'^(\s*)(?:public|private|internal|open|fileprivate|final|\s)*class\s+(\w+)(?:<[^>]*>)?(?:\s*:\s*[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        'swift_struct': re.compile(
+            r'^(\s*)(?:public|private|internal|fileprivate|\s)*struct\s+(\w+)(?:<[^>]*>)?(?:\s*:\s*[^{]+)?\s*\{',
+            re.MULTILINE
+        ),
+        # Kotlin
+        'kotlin_fun': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|inline|suspend|\s)*fun\s+(?:<[^>]*>\s*)?(\w+)\s*\([^)]*\)',
+            re.MULTILINE
+        ),
+        'kotlin_class': re.compile(
+            r'^(\s*)(?:public|private|protected|internal|open|abstract|sealed|data|enum|\s)*class\s+(\w+)(?:<[^>]*>)?',
+            re.MULTILINE
+        ),
+        # Scala
+        'scala_def': re.compile(
+            r'^(\s*)(?:override\s+)?def\s+(\w+)(?:\[[^\]]*\])?\s*(?:\([^)]*\))*',
+            re.MULTILINE
+        ),
+        'scala_class': re.compile(
+            r'^(\s*)(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?class\s+(\w+)(?:\[[^\]]*\])?',
+            re.MULTILINE
+        ),
+        'scala_object': re.compile(
+            r'^(\s*)(?:case\s+)?object\s+(\w+)',
+            re.MULTILINE
+        ),
+        'scala_trait': re.compile(
+            r'^(\s*)(?:sealed\s+)?trait\s+(\w+)(?:\[[^\]]*\])?',
+            re.MULTILINE
+        ),
+    }
+
     def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 200):
         """Initialize the code extractor.
 
@@ -287,6 +507,17 @@ class CodeExtractor:
             return self._extract_modula2_symbols(content)
         elif language == CodeLanguage.ASSEMBLY:
             return self._extract_asm_symbols(content)
+        elif language == CodeLanguage.PYTHON:
+            return self._extract_python_symbols(content)
+        elif language in (CodeLanguage.RUBY,):
+            return self._extract_ruby_symbols(content)
+        elif language in (CodeLanguage.JAVASCRIPT, CodeLanguage.TYPESCRIPT,
+                          CodeLanguage.CSHARP, CodeLanguage.JAVA,
+                          CodeLanguage.GO, CodeLanguage.RUST,
+                          CodeLanguage.C, CodeLanguage.CPP,
+                          CodeLanguage.PHP, CodeLanguage.SWIFT,
+                          CodeLanguage.KOTLIN, CodeLanguage.SCALA):
+            return self._extract_curly_brace_symbols(content, language)
         return []
 
     def _extract_delphi_symbols(self, content: str) -> List[CodeSymbol]:
@@ -610,6 +841,347 @@ class CodeExtractor:
 
         return min(start + 30, len(lines) - 1)
 
+    def _extract_python_symbols(self, content: str) -> List[CodeSymbol]:
+        """Extract symbols from Python code."""
+        symbols = []
+        lines = content.split('\n')
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+
+            # Check for class
+            match = self.PYTHON_PATTERNS['class'].match(line)
+            if match:
+                indent = len(match.group(1))
+                name = match.group(2)
+
+                end_line = self._find_python_block_end(lines, i, indent)
+                class_text = '\n'.join(lines[i:end_line + 1])
+
+                symbols.append(CodeSymbol(
+                    name=name,
+                    symbol_type="class",
+                    line_start=line_num,
+                    line_end=end_line + 1,
+                    text=class_text,
+                ))
+                i = end_line + 1
+                continue
+
+            # Check for function/method
+            match = self.PYTHON_PATTERNS['function'].match(line)
+            if match:
+                indent = len(match.group(1))
+                name = match.group(2)
+                is_method = indent > 0
+
+                end_line = self._find_python_block_end(lines, i, indent)
+                func_text = '\n'.join(lines[i:end_line + 1])
+
+                symbols.append(CodeSymbol(
+                    name=name,
+                    symbol_type="method" if is_method else "function",
+                    line_start=line_num,
+                    line_end=end_line + 1,
+                    text=func_text,
+                ))
+                i = end_line + 1
+                continue
+
+            i += 1
+
+        return symbols
+
+    def _find_python_block_end(self, lines: List[str], start: int, base_indent: int) -> int:
+        """Find the end of a Python indented block."""
+        for i in range(start + 1, len(lines)):
+            line = lines[i]
+
+            # Skip empty lines and comments
+            if not line.strip() or line.strip().startswith('#'):
+                continue
+
+            # Count leading whitespace
+            stripped = line.lstrip()
+            current_indent = len(line) - len(stripped)
+
+            # If we hit a line with same or less indent, block ended on previous line
+            if current_indent <= base_indent:
+                return i - 1
+
+        return len(lines) - 1
+
+    def _extract_ruby_symbols(self, content: str) -> List[CodeSymbol]:
+        """Extract symbols from Ruby code."""
+        symbols = []
+        lines = content.split('\n')
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+
+            # Check for class
+            match = self.CURLY_BRACE_PATTERNS['ruby_class'].match(line)
+            if match:
+                indent = len(match.group(1))
+                name = match.group(2)
+
+                end_line = self._find_ruby_block_end(lines, i, indent)
+                class_text = '\n'.join(lines[i:end_line + 1])
+
+                symbols.append(CodeSymbol(
+                    name=name,
+                    symbol_type="class",
+                    line_start=line_num,
+                    line_end=end_line + 1,
+                    text=class_text,
+                ))
+                i = end_line + 1
+                continue
+
+            # Check for module
+            match = self.CURLY_BRACE_PATTERNS['ruby_module'].match(line)
+            if match:
+                indent = len(match.group(1))
+                name = match.group(2)
+
+                end_line = self._find_ruby_block_end(lines, i, indent)
+                mod_text = '\n'.join(lines[i:end_line + 1])
+
+                symbols.append(CodeSymbol(
+                    name=name,
+                    symbol_type="module",
+                    line_start=line_num,
+                    line_end=end_line + 1,
+                    text=mod_text,
+                ))
+                i = end_line + 1
+                continue
+
+            # Check for def
+            match = self.CURLY_BRACE_PATTERNS['ruby_def'].match(line)
+            if match:
+                indent = len(match.group(1))
+                name = match.group(2)
+
+                end_line = self._find_ruby_block_end(lines, i, indent)
+                def_text = '\n'.join(lines[i:end_line + 1])
+
+                symbols.append(CodeSymbol(
+                    name=name,
+                    symbol_type="method" if indent > 0 else "function",
+                    line_start=line_num,
+                    line_end=end_line + 1,
+                    text=def_text,
+                ))
+                i = end_line + 1
+                continue
+
+            i += 1
+
+        return symbols
+
+    def _find_ruby_block_end(self, lines: List[str], start: int, base_indent: int) -> int:
+        """Find the end of a Ruby block (looking for matching 'end')."""
+        depth = 1
+        block_keywords = {'class', 'module', 'def', 'if', 'unless', 'case', 'while',
+                          'until', 'for', 'do', 'begin'}
+
+        for i in range(start + 1, len(lines)):
+            line = lines[i].strip()
+
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+
+            # Check for block openers
+            words = line.split()
+            if words:
+                first_word = words[0].rstrip(':')
+                if first_word in block_keywords:
+                    depth += 1
+                elif first_word == 'end':
+                    depth -= 1
+                    if depth == 0:
+                        return i
+
+        return min(start + 50, len(lines) - 1)
+
+    def _extract_curly_brace_symbols(self, content: str, language: CodeLanguage) -> List[CodeSymbol]:
+        """Extract symbols from curly-brace languages (JS/TS/C#/Java/Go/Rust/C/C++/PHP/Swift/Kotlin/Scala)."""
+        symbols = []
+        lines = content.split('\n')
+
+        # Determine which patterns to use based on language
+        patterns_to_check = []
+
+        if language in (CodeLanguage.JAVASCRIPT, CodeLanguage.TYPESCRIPT):
+            patterns_to_check = [
+                ('js_class', 'class'),
+                ('ts_interface', 'interface'),
+                ('ts_type', 'type'),
+                ('js_function', 'function'),
+                ('js_arrow', 'function'),
+                ('js_method', 'method'),
+            ]
+        elif language in (CodeLanguage.CSHARP, CodeLanguage.JAVA):
+            patterns_to_check = [
+                ('csharp_class', 'class'),
+                ('csharp_interface', 'interface'),
+                ('csharp_method', 'method'),
+                ('csharp_property', 'property'),
+            ]
+        elif language == CodeLanguage.GO:
+            patterns_to_check = [
+                ('go_type', 'type'),
+                ('go_func', 'function'),
+            ]
+        elif language == CodeLanguage.RUST:
+            patterns_to_check = [
+                ('rust_impl', 'impl'),
+                ('rust_trait', 'trait'),
+                ('rust_struct', 'struct'),
+                ('rust_enum', 'enum'),
+                ('rust_fn', 'function'),
+            ]
+        elif language in (CodeLanguage.C, CodeLanguage.CPP):
+            # C/C++ use a simpler approach - just find functions
+            patterns_to_check = [
+                ('csharp_class', 'class'),  # C++ classes
+                ('csharp_method', 'function'),  # Functions look similar
+            ]
+        elif language == CodeLanguage.PHP:
+            patterns_to_check = [
+                ('php_class', 'class'),
+                ('php_function', 'function'),
+            ]
+        elif language == CodeLanguage.SWIFT:
+            patterns_to_check = [
+                ('swift_class', 'class'),
+                ('swift_struct', 'struct'),
+                ('swift_func', 'function'),
+            ]
+        elif language == CodeLanguage.KOTLIN:
+            patterns_to_check = [
+                ('kotlin_class', 'class'),
+                ('kotlin_fun', 'function'),
+            ]
+        elif language == CodeLanguage.SCALA:
+            patterns_to_check = [
+                ('scala_class', 'class'),
+                ('scala_object', 'object'),
+                ('scala_trait', 'trait'),
+                ('scala_def', 'function'),
+            ]
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+            matched = False
+
+            for pattern_name, symbol_type in patterns_to_check:
+                pattern = self.CURLY_BRACE_PATTERNS.get(pattern_name)
+                if not pattern:
+                    continue
+
+                match = pattern.match(line)
+                if match:
+                    # Extract name - position varies by pattern
+                    groups = match.groups()
+                    name = None
+                    for g in groups:
+                        if g and not g.isspace() and len(g) > 0:
+                            # Skip indentation groups (all whitespace)
+                            if not g.strip():
+                                continue
+                            name = g.strip()
+                            break
+
+                    if not name:
+                        continue
+
+                    # Find the end of the block
+                    end_line = self._find_curly_brace_end(lines, i)
+                    block_text = '\n'.join(lines[i:end_line + 1])
+
+                    symbols.append(CodeSymbol(
+                        name=name,
+                        symbol_type=symbol_type,
+                        line_start=line_num,
+                        line_end=end_line + 1,
+                        text=block_text,
+                    ))
+                    i = end_line + 1
+                    matched = True
+                    break
+
+            if not matched:
+                i += 1
+
+        return symbols
+
+    def _find_curly_brace_end(self, lines: List[str], start: int) -> int:
+        """Find the end of a curly-brace block."""
+        depth = 0
+        in_string = False
+        string_char = None
+        in_multiline_comment = False
+
+        for i in range(start, len(lines)):
+            line = lines[i]
+            j = 0
+
+            while j < len(line):
+                char = line[j]
+
+                # Handle multiline comments
+                if in_multiline_comment:
+                    if j < len(line) - 1 and line[j:j+2] == '*/':
+                        in_multiline_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+
+                # Check for multiline comment start
+                if j < len(line) - 1 and line[j:j+2] == '/*':
+                    in_multiline_comment = True
+                    j += 2
+                    continue
+
+                # Check for single-line comment
+                if j < len(line) - 1 and line[j:j+2] == '//':
+                    break  # Rest of line is comment
+
+                # Handle strings
+                if in_string:
+                    if char == string_char and (j == 0 or line[j-1] != '\\'):
+                        in_string = False
+                    j += 1
+                    continue
+
+                if char in ('"', "'", '`'):
+                    in_string = True
+                    string_char = char
+                    j += 1
+                    continue
+
+                # Count braces
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return i
+
+                j += 1
+
+        return min(start + 100, len(lines) - 1)
+
     def chunk_code(
         self,
         content: str,
@@ -879,9 +1451,36 @@ class CodeExtractor:
 
 # Supported file extensions for easy checking
 SUPPORTED_CODE_EXTENSIONS = {
-    '.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm',  # Pascal/Delphi
-    '.mod', '.def', '.mi',  # Modula-2
-    '.asm', '.s',  # Assembly
+    # Python
+    '.py', '.pyw', '.pyi',
+    # JavaScript/TypeScript
+    '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts',
+    # C#
+    '.cs',
+    # Java
+    '.java',
+    # Go
+    '.go',
+    # Rust
+    '.rs',
+    # C/C++
+    '.c', '.h', '.cpp', '.cxx', '.cc', '.hpp', '.hxx', '.hh',
+    # PHP
+    '.php', '.phtml',
+    # Ruby
+    '.rb', '.rake', '.gemspec',
+    # Swift
+    '.swift',
+    # Kotlin
+    '.kt', '.kts',
+    # Scala
+    '.scala', '.sc',
+    # Pascal/Delphi
+    '.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm',
+    # Modula-2
+    '.mod', '.def', '.mi',
+    # Assembly
+    '.asm', '.s',
 }
 
 

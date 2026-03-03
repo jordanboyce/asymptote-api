@@ -9,7 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes
-SCHEMA_VERSION = "3.0"
+SCHEMA_VERSION = "3.1"
 
 
 class MetadataStore:
@@ -131,6 +131,11 @@ class MetadataStore:
             # Migration from 1.0/2.0 to 3.0
             if current_version in ("1.0", "2.0"):
                 self._migrate_to_v3(conn)
+                current_version = "3.0"
+
+            # Migration from 3.0 to 3.1
+            if current_version == "3.0":
+                self._migrate_to_v3_1(conn)
 
             # Update schema version
             conn.execute("""
@@ -206,6 +211,32 @@ class MetadataStore:
             )
             WHERE source_format IS NULL
         """)
+
+    def _migrate_to_v3_1(self, conn: sqlite3.Connection):
+        """Migrate from v3.0 to v3.1 schema (local file reference support)."""
+        doc_columns = self._get_table_columns(conn, "documents")
+
+        new_doc_columns = [
+            ("source_path", "TEXT DEFAULT NULL"),      # Original filesystem path for local references
+            ("source_type", "TEXT DEFAULT 'upload'"),  # 'upload' or 'local_reference'
+        ]
+
+        for col_name, col_def in new_doc_columns:
+            if col_name not in doc_columns:
+                conn.execute(f"ALTER TABLE documents ADD COLUMN {col_name} {col_def}")
+                logger.info(f"Added column {col_name} to documents table")
+
+    def _ensure_v3_1_columns(self, conn: sqlite3.Connection):
+        """Ensure v3.1 columns exist (defensive migration for runtime checks)."""
+        doc_columns = self._get_table_columns(conn, "documents")
+        if "source_path" not in doc_columns:
+            logger.warning("Running defensive v3.1 migration - columns were missing")
+            self._migrate_to_v3_1(conn)
+            conn.execute("""
+                INSERT OR REPLACE INTO schema_info (key, value)
+                VALUES ('version', ?)
+            """, (SCHEMA_VERSION,))
+            conn.commit()
 
     def _get_table_columns(self, conn: sqlite3.Connection, table_name: str) -> set:
         """Get set of column names for a table."""
@@ -346,19 +377,27 @@ class MetadataStore:
         List all documents with their statistics.
 
         Returns:
-            List of document metadata dictionaries
+            List of document metadata dictionaries including source_type and source_path
         """
         with sqlite3.connect(self.db_path) as conn:
+            # Ensure v3.1 columns exist
+            self._ensure_v3_1_columns(conn)
+
             conn.row_factory = sqlite3.Row
+            # Join with documents table to get source_type and source_path
             cursor = conn.execute("""
                 SELECT
-                    document_id,
-                    filename,
+                    c.document_id,
+                    c.filename,
                     COUNT(*) as num_chunks,
-                    COUNT(DISTINCT page_number) as num_pages
-                FROM chunks
-                GROUP BY document_id, filename
-                ORDER BY COALESCE(MAX(created_at), '1970-01-01') DESC
+                    COUNT(DISTINCT c.page_number) as num_pages,
+                    d.source_type,
+                    d.source_path,
+                    d.upload_timestamp
+                FROM chunks c
+                LEFT JOIN documents d ON c.document_id = d.document_id
+                GROUP BY c.document_id, c.filename
+                ORDER BY COALESCE(MAX(c.created_at), '1970-01-01') DESC
             """)
 
             return [dict(row) for row in cursor.fetchall()]
@@ -367,7 +406,8 @@ class MetadataStore:
                      num_chunks: int, upload_timestamp: str,
                      source_format: str = None, extraction_method: str = "text",
                      embedding_model: str = None, chunk_size: int = None,
-                     chunk_overlap: int = None):
+                     chunk_overlap: int = None, source_path: str = None,
+                     source_type: str = "upload"):
         """
         Add document metadata.
 
@@ -382,17 +422,22 @@ class MetadataStore:
             embedding_model: Embedding model used
             chunk_size: Chunk size used during indexing
             chunk_overlap: Chunk overlap used during indexing
+            source_path: Original filesystem path (for local references)
+            source_type: Source type: 'upload' or 'local_reference'
         """
         with sqlite3.connect(self.db_path) as conn:
+            # Ensure v3.1 columns exist (defensive migration for cached instances)
+            self._ensure_v3_1_columns(conn)
+
             conn.execute("""
                 INSERT OR REPLACE INTO documents
                 (document_id, filename, num_pages, num_chunks, upload_timestamp,
                  source_format, extraction_method, embedding_model, chunk_size,
-                 chunk_overlap, schema_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 chunk_overlap, schema_version, source_path, source_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (document_id, filename, num_pages, num_chunks, upload_timestamp,
                   source_format, extraction_method, embedding_model, chunk_size,
-                  chunk_overlap, SCHEMA_VERSION))
+                  chunk_overlap, SCHEMA_VERSION, source_path, source_type))
             conn.commit()
 
     def get_all_chunks_ordered(self) -> List[dict]:
@@ -445,11 +490,14 @@ class MetadataStore:
             Document metadata dictionary or None
         """
         with sqlite3.connect(self.db_path) as conn:
+            # Ensure v3.1 columns exist (defensive migration for cached instances)
+            self._ensure_v3_1_columns(conn)
+
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT document_id, filename, num_pages, num_chunks, upload_timestamp,
                        source_format, extraction_method, embedding_model, chunk_size,
-                       chunk_overlap, schema_version
+                       chunk_overlap, schema_version, source_path, source_type
                 FROM documents
                 WHERE document_id = ?
             """, (document_id,))
@@ -494,6 +542,28 @@ class MetadataStore:
             """, (document_id,))
 
             return [row[0] for row in cursor.fetchall()]
+
+    def update_document_source(self, document_id: str, source_path: str,
+                                source_type: str = "local_reference"):
+        """
+        Update the source path and type for a document.
+
+        Args:
+            document_id: Document identifier
+            source_path: Original filesystem path
+            source_type: Source type: 'upload' or 'local_reference'
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            # Ensure v3.1 columns exist (defensive migration for cached instances)
+            self._ensure_v3_1_columns(conn)
+
+            conn.execute("""
+                UPDATE documents
+                SET source_path = ?, source_type = ?
+                WHERE document_id = ?
+            """, (source_path, source_type, document_id))
+            conn.commit()
+            logger.info(f"Updated source for document {document_id}: {source_type} -> {source_path}")
 
     def clear_all(self):
         """Clear all chunks and documents from the metadata store."""

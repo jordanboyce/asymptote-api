@@ -40,6 +40,10 @@ class ConfigManager:
             "data_dir": str(settings.data_dir),
             "host": settings.host,
             "port": settings.port,
+            # OCR settings
+            "enable_ocr": settings.enable_ocr,
+            "ocr_engine": settings.ocr_engine,
+            "ocr_language": settings.ocr_language,
         }
 
         # Override with database values if present
@@ -73,14 +77,15 @@ class ConfigManager:
         }
 
         # Fields that require restart
-        restart_fields = {"embedding_model", "host", "port"}
+        restart_fields = {"embedding_model", "host", "port", "enable_ocr", "ocr_engine"}
         # Fields that require re-indexing
         reindex_fields = {"embedding_model", "chunk_size", "chunk_overlap"}
 
         # Validate updates
         valid_fields = {
             "embedding_model", "chunk_size", "chunk_overlap",
-            "default_top_k", "max_top_k"
+            "default_top_k", "max_top_k",
+            "enable_ocr", "ocr_engine", "ocr_language",
         }
 
         for key in updates.keys():

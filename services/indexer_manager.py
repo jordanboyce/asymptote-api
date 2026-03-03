@@ -35,11 +35,15 @@ class IndexerManager:
             ocr_engine=settings.ocr_engine,
             ocr_language=settings.ocr_language,
             ocr_fallback_only=settings.ocr_fallback_only,
+            ocr_char_threshold=settings.ocr_char_threshold,
+            ocr_max_pages=settings.ocr_max_pages,
+            ocr_max_file_mb=settings.ocr_max_file_mb,
         )
 
         if settings.enable_ocr:
             ocr_available = self._document_extractor.is_ocr_available()
-            logger.info(f"OCR enabled: {ocr_available} (engine: {settings.ocr_engine})")
+            engine_name = self._document_extractor.get_ocr_engine_name()
+            logger.info(f"OCR enabled: {ocr_available} (engine: {engine_name or settings.ocr_engine})")
 
     def get_indexer(self, collection_id: str = "default") -> DocumentIndexer:
         """Get or create an indexer for a collection.

@@ -50,6 +50,7 @@ cd frontend
 npm install
 
 # Start development server (hot reload)
+# Runs on port 5173, proxies API requests to backend on port 8000
 npm run dev
 
 # Build for production (outputs to ../static/)
@@ -58,6 +59,24 @@ npm run build
 # Preview production build
 npm run preview
 ```
+
+**Running Frontend Separately (Recommended for Development):**
+
+For the best development experience, run the frontend and backend as separate processes:
+
+```bash
+# Terminal 1: Start the API server
+python main.py
+
+# Terminal 2: Start the frontend dev server
+cd frontend
+npm run dev
+```
+
+Then access the UI at `http://localhost:5173`. The Vite dev server will proxy all API requests to the backend automatically.
+
+**Environment Variables:**
+- `VITE_API_URL`: Backend API URL (default: `http://localhost:8000`)
 
 ### Docker
 

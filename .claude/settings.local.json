@@ -10,7 +10,8 @@
       "Bash(python -m json.tool:*)",
       "Bash(python -m py_compile:*)",
       "Bash(.venv/Scripts/python:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(wc:*)"
     ]
   }
 }

@@ -1,5 +1,6 @@
 """Pydantic schemas for API request/response models."""
 
+from enum import Enum
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
@@ -48,7 +49,11 @@ class DocumentMetadata(BaseModel):
     embedding_model: Optional[str] = Field(None, description="Embedding model used for this document")
     chunk_size: Optional[int] = Field(None, description="Chunk size used during indexing")
     chunk_overlap: Optional[int] = Field(None, description="Chunk overlap used during indexing")
-    schema_version: str = Field(default="3.0", description="Schema version for migration compatibility")
+    schema_version: str = Field(default="3.1", description="Schema version for migration compatibility")
+
+    # v3.1: Local file reference support
+    source_path: Optional[str] = Field(None, description="Original filesystem path for local references")
+    source_type: str = Field(default="upload", description="Source type: 'upload' or 'local_reference'")
 
 
 class SearchResult(BaseModel):
@@ -80,6 +85,10 @@ class SearchResult(BaseModel):
     line_start: Optional[int] = Field(None, description="Starting line number")
     line_end: Optional[int] = Field(None, description="Ending line number")
 
+    # v3.1: Local file reference support
+    source_type: Optional[str] = Field(None, description="Source type: 'upload' or 'local_reference'")
+    source_path: Optional[str] = Field(None, description="Original filesystem path for local references")
+
 
 class UploadResponse(BaseModel):
     """Response from document upload endpoint."""
@@ -91,6 +100,41 @@ class UploadResponse(BaseModel):
     document_ids: List[str] = Field(..., description="List of created document IDs")
 
 
+class UploadPhase(str, Enum):
+    """Upload processing phases for granular progress tracking."""
+
+    PENDING = "pending"
+    EXTRACTING = "extracting"
+    CHUNKING = "chunking"
+    EMBEDDING = "embedding"
+    SAVING = "saving"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class UploadJobResponse(BaseModel):
+    """Response from async upload job endpoint."""
+
+    job_id: int = Field(..., description="Unique job identifier")
+    collection_id: str = Field(..., description="Target collection ID")
+    status: str = Field(..., description="Job status: pending, running, completed, failed")
+    total_files: int = Field(..., description="Total files to process")
+    processed_files: int = Field(..., description="Files processed so far")
+    current_file: Optional[str] = Field(None, description="File currently being processed")
+    progress_percent: float = Field(0.0, description="Progress percentage (0-100)")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    result_summary: Optional[Dict[str, Any]] = Field(None, description="Results when completed")
+    started_at: Optional[str] = Field(None, description="ISO timestamp when job started")
+    completed_at: Optional[str] = Field(None, description="ISO timestamp when job completed")
+
+    # v4.0: Granular progress tracking
+    phase: Optional[str] = Field(None, description="Current processing phase")
+    phase_progress: Optional[int] = Field(None, description="Progress within current phase (0-100)")
+    phase_detail: Optional[str] = Field(None, description="Detailed phase status message")
+    chunks_processed: Optional[int] = Field(None, description="Chunks processed in current file")
+    chunks_total: Optional[int] = Field(None, description="Total chunks in current file")
+
+
 class AIOptions(BaseModel):
     """Optional AI enhancement settings for search."""
 
@@ -99,11 +143,26 @@ class AIOptions(BaseModel):
     synthesize: bool = Field(False, description="Generate an AI summary with citations")
 
 
+class SearchMode(str, Enum):
+    """Search mode options."""
+
+    SEMANTIC = "semantic"  # Pure semantic/embedding search
+    KEYWORD = "keyword"    # Pure BM25 keyword search
+    HYBRID = "hybrid"      # Combined semantic + keyword
+
+
 class SearchRequest(BaseModel):
     """Request body for search endpoint."""
 
     query: str = Field(..., description="Search query text", min_length=1)
     top_k: int = Field(10, description="Number of results to return", ge=1, le=50)
+    mode: SearchMode = Field(SearchMode.SEMANTIC, description="Search mode: semantic, keyword, or hybrid")
+    semantic_weight: float = Field(
+        0.7,
+        description="Weight for semantic search in hybrid mode (0-1). Higher = more semantic.",
+        ge=0.0,
+        le=1.0
+    )
     ai: Optional[AIOptions] = Field(None, description="Optional AI enhancement settings")
 
 
@@ -153,6 +212,13 @@ class AskRequest(BaseModel):
     include_sources: bool = Field(True, description="Include source excerpts in response")
     max_source_length: int = Field(500, description="Max characters per source excerpt", ge=100, le=2000)
     format: str = Field("markdown", description="Response format: 'text', 'markdown', or 'json'")
+    mode: SearchMode = Field(SearchMode.SEMANTIC, description="Search mode: semantic, keyword, or hybrid")
+    semantic_weight: float = Field(
+        0.7,
+        description="Weight for semantic search in hybrid mode (0-1). Higher = more semantic.",
+        ge=0.0,
+        le=1.0
+    )
 
 
 class AskSource(BaseModel):
@@ -195,9 +261,10 @@ class RepoUploadResponse(BaseModel):
     """Response from repository upload endpoint."""
 
     message: str = Field(..., description="Status message")
-    files_found: int = Field(..., description="Total files found matching patterns")
-    files_indexed: int = Field(..., description="Files successfully indexed")
-    files_failed: int = Field(..., description="Files that failed to index")
-    total_chunks: int = Field(..., description="Total chunks created")
-    document_ids: List[str] = Field(..., description="List of created document IDs")
+    job_id: Optional[int] = Field(None, description="Background job ID for async processing")
+    files_found: int = Field(0, description="Total files found matching patterns")
+    files_indexed: int = Field(0, description="Files successfully indexed")
+    files_failed: int = Field(0, description="Files that failed to index")
+    total_chunks: int = Field(0, description="Total chunks created")
+    document_ids: List[str] = Field(default_factory=list, description="List of created document IDs")
     failed_files: List[Dict[str, str]] = Field(default_factory=list, description="List of files that failed with error messages")

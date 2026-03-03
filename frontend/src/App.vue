@@ -79,6 +79,21 @@
                 <div class="text-xs text-primary-content/70">Chunks</div>
               </div>
             </div>
+
+            <!-- Background Jobs Indicator - Opens sidebar drawer -->
+            <button
+              class="btn btn-ghost btn-circle relative ml-2"
+              @click="showJobsDrawer = true"
+              title="Background Jobs"
+            >
+              <PanelRightOpen :size="20" class="text-primary-content" :class="{ 'animate-pulse': backgroundJobsStore.hasActiveJobs }" />
+              <span
+                v-if="backgroundJobsStore.activeJobCount > 0"
+                class="absolute -top-1 -right-1 badge badge-sm badge-warning"
+              >
+                {{ backgroundJobsStore.activeJobCount }}
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -112,6 +127,18 @@
             <FileText :size="20" class="mr-2" />
             Documents
           </a>
+          <a
+            role="tab"
+            class="tab tab-lg font-semibold transition-all"
+            :class="{
+              'tab-active bg-primary text-primary-content': activeTab === 'code',
+              'hover:bg-base-200': activeTab !== 'code'
+            }"
+            @click="activeTab = 'code'"
+          >
+            <Code :size="20" class="mr-2" />
+            Code
+          </a>
 
           <!-- Spacer -->
           <div class="flex-1"></div>
@@ -132,8 +159,9 @@
     <!-- Tab Content -->
     <div class="container mx-auto px-4 mt-6">
       <div class="bg-base-100 rounded-lg shadow-xl p-6">
-        <SearchTab v-if="activeTab === 'search'" @stats-updated="loadStats" @switch-tab="switchTab" />
-        <DocumentsTab v-if="activeTab === 'documents'" @document-deleted="handleDocumentDeleted" />
+        <SearchTab v-if="activeTab === 'search'" :chunk-count="stats.chunks" @stats-updated="loadStats" @switch-tab="switchTab" />
+        <DocumentsTab v-if="activeTab === 'documents'" @document-deleted="handleDocumentDeleted" @background-job-started="showJobsDrawer = true" />
+        <CodeIndexingTab v-if="activeTab === 'code'" @indexed="handleDocumentDeleted" />
         <SettingsTab v-if="activeTab === 'settings'" @data-cleared="handleDataCleared" @stats-updated="loadStats" />
       </div>
     </div>
@@ -350,21 +378,141 @@
         <button @click="closeDeleteModal">close</button>
       </form>
     </dialog>
+
+    <!-- Background Jobs Sidebar Drawer -->
+    <div
+      v-if="showJobsDrawer"
+      class="fixed inset-0 z-[200]"
+      @click.self="showJobsDrawer = false"
+    >
+      <!-- Backdrop -->
+      <div class="absolute inset-0 bg-black/30" @click="showJobsDrawer = false"></div>
+
+      <!-- Drawer Panel -->
+      <div class="absolute right-0 top-0 h-full w-96 max-w-[90vw] bg-base-100 shadow-2xl flex flex-col">
+        <!-- Header -->
+        <div class="flex items-center justify-between p-4 border-b border-base-300">
+          <h3 class="text-lg font-bold">Background Jobs</h3>
+          <button class="btn btn-ghost btn-sm btn-circle" @click="showJobsDrawer = false">
+            <X :size="20" />
+          </button>
+        </div>
+
+        <!-- Content -->
+        <div class="flex-1 overflow-y-auto p-4">
+          <div v-if="backgroundJobsStore.allJobs.length === 0" class="text-center py-12 text-base-content/50">
+            <Bell :size="48" class="mx-auto mb-4 opacity-30" />
+            <p>No background jobs</p>
+            <p class="text-sm mt-1">Large file uploads will appear here</p>
+          </div>
+
+          <div v-else class="space-y-4">
+            <div
+              v-for="job in backgroundJobsStore.allJobs"
+              :key="`${job.type}-${job.id}`"
+              class="card bg-base-200"
+            >
+              <div class="card-body p-4">
+                <!-- Job Header -->
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <Loader2
+                      v-if="job.status === 'pending' || job.status === 'running'"
+                      :size="18"
+                      class="animate-spin text-primary"
+                    />
+                    <CheckCircle
+                      v-else-if="job.status === 'completed'"
+                      :size="18"
+                      class="text-success"
+                    />
+                    <XCircle
+                      v-else-if="job.status === 'failed' || job.status === 'cancelled'"
+                      :size="18"
+                      class="text-error"
+                    />
+                    <span class="font-semibold capitalize">
+                      {{ job.type === 'index' ? 'Indexing' : job.type === 'upload' ? 'Upload' : job.type }}
+                    </span>
+                    <span class="badge badge-sm" :class="{
+                      'badge-warning': job.status === 'pending',
+                      'badge-info': job.status === 'running',
+                      'badge-success': job.status === 'completed',
+                      'badge-error': job.status === 'failed' || job.status === 'cancelled'
+                    }">{{ job.status }}</span>
+                  </div>
+                  <button
+                    v-if="(job.type === 'upload' || job.type === 'index') && (job.status === 'pending' || job.status === 'running')"
+                    @click="cancelJob(job.id)"
+                    class="btn btn-ghost btn-xs text-error"
+                    title="Cancel"
+                  >
+                    <XCircle :size="16" />
+                  </button>
+                </div>
+
+                <!-- Current File -->
+                <div v-if="job.currentFile" class="text-sm text-base-content/70 truncate">
+                  {{ job.currentFile }}
+                </div>
+
+                <!-- Phase Info -->
+                <div v-if="job.phase && (job.status === 'running' || job.status === 'pending')" class="flex items-center gap-2 text-sm">
+                  <span class="text-base-content/50">Phase:</span>
+                  <span class="badge badge-sm badge-primary capitalize">{{ job.phase }}</span>
+                  <span v-if="job.chunksTotal > 0" class="text-base-content/50">
+                    ({{ job.chunksProcessed }}/{{ job.chunksTotal }} chunks)
+                  </span>
+                </div>
+
+                <!-- Progress -->
+                <div v-if="job.status === 'running' || job.status === 'pending'" class="space-y-1">
+                  <progress
+                    class="progress progress-primary w-full"
+                    :value="job.progress"
+                    max="100"
+                  ></progress>
+                  <div class="flex justify-between text-xs text-base-content/60">
+                    <span>{{ Math.round(job.progress) }}%</span>
+                    <span>{{ job.processedFiles || 0 }}/{{ job.totalFiles || '?' }} files</span>
+                  </div>
+                </div>
+
+                <!-- Error -->
+                <div v-if="job.error" class="text-sm text-error">
+                  {{ job.error }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div v-if="backgroundJobsStore.allJobs.some(j => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled')" class="p-4 border-t border-base-300">
+          <button class="btn btn-ghost btn-sm w-full" @click="clearCompletedJobs">
+            Clear completed jobs
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from 'axios'
-import { Search, FileText, Settings, Plus, ChevronDown, Pencil, Trash2 } from 'lucide-vue-next'
+import { Search, FileText, Settings, Plus, ChevronDown, Pencil, Trash2, Bell, Loader2, CheckCircle, XCircle, X, PanelRightOpen, Code } from 'lucide-vue-next'
 import SearchTab from './components/SearchTab.vue'
 import DocumentsTab from './components/DocumentsTab.vue'
+import CodeIndexingTab from './components/CodeIndexingTab.vue'
 import SettingsTab from './components/SettingsTab.vue'
 import { useCollectionStore } from './stores/collectionStore'
 import { useSearchStore } from './stores/searchStore'
+import { useBackgroundJobsStore } from './stores/backgroundJobsStore'
 
 const collectionStore = useCollectionStore()
 const searchStore = useSearchStore()
+const backgroundJobsStore = useBackgroundJobsStore()
 
 const activeTab = ref('search')
 const currentTheme = ref('light')
@@ -394,6 +542,9 @@ const updatingCollection = ref(false)
 const showDeleteConfirmModal = ref(false)
 const deletingCollection = ref(false)
 const deleteError = ref('')
+
+// Background jobs drawer state
+const showJobsDrawer = ref(false)
 
 const updateThemeFromStorage = () => {
   const savedTheme = localStorage.getItem('theme')
@@ -547,12 +698,37 @@ watch(() => collectionStore.currentCollectionId, () => {
   loadStats()
 })
 
+// Clear completed jobs from the drawer
+const clearCompletedJobs = () => {
+  // Remove completed upload jobs
+  backgroundJobsStore.uploadJobs = backgroundJobsStore.uploadJobs.filter(
+    j => j.status === 'pending' || j.status === 'running'
+  )
+  // Clear completed reindex job
+  if (backgroundJobsStore.reindexJob &&
+      (backgroundJobsStore.reindexJob.status === 'completed' || backgroundJobsStore.reindexJob.status === 'failed')) {
+    backgroundJobsStore.clearReindexJob()
+  }
+}
+
+// Cancel an active upload job
+const cancelJob = async (jobId) => {
+  try {
+    await backgroundJobsStore.cancelUploadJob(jobId)
+  } catch (err) {
+    console.error('Failed to cancel job:', err)
+  }
+}
+
 onMounted(async () => {
   // Load collections first
   await collectionStore.loadCollections()
 
   // Then load stats for current collection
   loadStats()
+
+  // Check for any active background jobs
+  backgroundJobsStore.checkActiveJobs()
 
   // Initialize theme
   updateThemeFromStorage()
@@ -575,5 +751,9 @@ onMounted(async () => {
       updateThemeFromStorage()
     }
   })
+})
+
+onBeforeUnmount(() => {
+  backgroundJobsStore.cleanup()
 })
 </script>

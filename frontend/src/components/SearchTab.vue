@@ -37,13 +37,14 @@
           type="text"
           placeholder="e.g., machine learning algorithms"
           class="input input-bordered join-item flex-1"
+          :disabled="searchDisabled"
           @keyup.enter="search"
         />
         <button
           v-if="!loading"
           class="btn btn-primary join-item"
           @click="search"
-          :disabled="!searchStore.query.trim()"
+          :disabled="!searchStore.query.trim() || searchDisabled"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
@@ -61,24 +62,78 @@
           Cancel
         </button>
       </div>
-      <div v-if="loading" class="text-sm text-base-content/60 mt-2">
+      <!-- Empty collection notice -->
+      <div v-if="searchDisabled" class="text-sm text-warning mt-2">
+        No data indexed in this collection. Add documents or code first.
+      </div>
+      <div v-else-if="loading" class="text-sm text-base-content/60 mt-2">
         <span class="loading loading-spinner loading-xs mr-2"></span>
         {{ aiActive ? (selectedProviders.includes('ollama') ? 'AI processing... (Ollama may take a while)' : 'AI processing...') : 'Searching...' }}
       </div>
     </div>
 
-    <!-- Number of Results -->
-    <div class="form-control w-full max-w-xs">
-      <label class="label">
-        <span class="label-text">Max Number of results</span>
-      </label>
-      <input
-        v-model.number="searchStore.topK"
-        type="number"
-        min="1"
-        max="50"
-        class="input input-bordered w-full max-w-xs"
-      />
+    <!-- Search Options Row -->
+    <div class="flex flex-wrap gap-4">
+      <!-- Number of Results -->
+      <div class="form-control w-full max-w-xs">
+        <label class="label">
+          <span class="label-text">Max Number of results</span>
+        </label>
+        <input
+          v-model.number="searchStore.topK"
+          type="number"
+          min="1"
+          max="50"
+          class="input input-bordered w-full max-w-xs"
+        />
+      </div>
+
+      <!-- Search Mode -->
+      <div class="form-control w-full max-w-xs">
+        <label class="label">
+          <span class="label-text">Search Mode</span>
+        </label>
+        <select v-model="searchMode" class="select select-bordered w-full max-w-xs">
+          <option value="semantic">Semantic (meaning-based)</option>
+          <option value="keyword">Keyword (exact terms)</option>
+          <option value="hybrid">Hybrid (both combined)</option>
+        </select>
+      </div>
+
+      <!-- Semantic Weight (only show for hybrid mode) -->
+      <div v-if="searchMode === 'hybrid'" class="form-control w-full max-w-xs">
+        <label class="label">
+          <span class="label-text">Semantic Weight: {{ Math.round(semanticWeight * 100) }}%</span>
+        </label>
+        <input
+          v-model.number="semanticWeight"
+          type="range"
+          min="0"
+          max="1"
+          step="0.1"
+          class="range range-primary"
+        />
+        <div class="w-full flex justify-between text-xs px-2 mt-1">
+          <span>Keywords</span>
+          <span>Balanced</span>
+          <span>Semantic</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Search Mode Info -->
+    <div v-if="searchMode !== 'semantic'" class="alert alert-info py-2">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-5 h-5">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+      </svg>
+      <div class="text-sm">
+        <span v-if="searchMode === 'keyword'">
+          <strong>Keyword search</strong> matches exact terms using BM25. Best for product codes, IDs, or technical terms.
+        </span>
+        <span v-else-if="searchMode === 'hybrid'">
+          <strong>Hybrid search</strong> combines semantic understanding with keyword matching. Best of both worlds.
+        </span>
+      </div>
     </div>
 
     <!-- AI Provider Selection - Only show if features are enabled in Settings -->
@@ -291,6 +346,10 @@
                 <div v-if="result.source_format" class="badge badge-outline badge-sm">
                   {{ result.source_format.toUpperCase() }}
                 </div>
+                <!-- Local reference indicator -->
+                <div v-if="result.source_type === 'local_reference'" class="badge badge-ghost badge-sm" title="Indexed in-place from local file">
+                  local
+                </div>
               </div>
             </div>
           </div>
@@ -466,7 +525,17 @@ import axios from 'axios'
 import { useSearchStore } from '../stores/searchStore'
 import { useCollectionStore } from '../stores/collectionStore'
 
+const props = defineProps({
+  chunkCount: {
+    type: Number,
+    default: 0
+  }
+})
+
 const emit = defineEmits(['stats-updated', 'switch-tab'])
+
+// Computed to check if search is available
+const searchDisabled = computed(() => props.chunkCount === 0)
 
 // Use the search store for persistent state
 const searchStore = useSearchStore()
@@ -475,6 +544,10 @@ const collectionStore = useCollectionStore()
 // Local state for loading and error (not persisted)
 const loading = ref(false)
 const error = ref('')
+
+// Search mode options
+const searchMode = ref('hybrid')  // 'semantic', 'keyword', or 'hybrid'
+const semanticWeight = ref(0.7)     // Weight for semantic search in hybrid mode (0-1)
 
 // AbortController for cancelling ongoing searches
 let abortController = null
@@ -762,6 +835,8 @@ const executeSearch = async () => {
         const body = {
           query: searchStore.query,
           top_k: searchStore.topK,
+          mode: searchMode.value,
+          semantic_weight: semanticWeight.value,
           ai: {
             provider: provider,
             rerank: !!aiSettings.rerank,
@@ -815,7 +890,12 @@ const executeSearch = async () => {
       })
     } else {
       // Regular search without AI
-      const body = { query: searchStore.query, top_k: searchStore.topK }
+      const body = {
+        query: searchStore.query,
+        top_k: searchStore.topK,
+        mode: searchMode.value,
+        semantic_weight: semanticWeight.value
+      }
       const collectionId = collectionStore.currentCollectionId
       const response = await axios.post(`/search?collection_id=${collectionId}`, body, { signal })
       searchStore.setSearchResults({

@@ -7,15 +7,18 @@ Supports PDF, TXT, DOCX, and CSV files.
 
 import logging
 import json
+import tempfile
+import asyncio
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import shutil
 
 from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from config import settings
 from services.document_extractor import DocumentExtractor, is_code_file
@@ -33,6 +36,7 @@ from services.backup_service import BackupService
 from services.index_repair import IndexRepairService
 from models.schemas import (
     UploadResponse,
+    UploadJobResponse,
     SearchRequest,
     SearchResponse,
     DocumentListResponse,
@@ -43,6 +47,7 @@ from models.schemas import (
     RepoUploadRequest,
     RepoUploadResponse,
 )
+from services.upload_service import upload_service
 
 # Configure logging
 logging.basicConfig(
@@ -224,13 +229,13 @@ async def upload_documents(
     document_dir = indexer_manager.get_documents_path(collection_id)
 
     # Validate all files have supported extensions
-    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
     for file in files:
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in SUPPORTED_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, MD, JSON, and code files (Pascal, Delphi, Modula-2, Assembly)",
+                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, MD, JSON, JSONL, and code files (Pascal, Delphi, Modula-2, Assembly)",
             )
 
     indexed_docs = []
@@ -309,26 +314,410 @@ async def upload_documents(
 
 
 @app.post(
+    "/documents/upload-async",
+    response_model=UploadJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload documents asynchronously (for large files)",
+    tags=["documents"],
+)
+async def upload_documents_async(
+    files: List[UploadFile] = File(...),
+    collection_id: str = "default",
+) -> UploadJobResponse:
+    """
+    Upload documents for background processing. Returns immediately with a job ID.
+
+    Use this endpoint for large files to avoid blocking the API.
+    Poll /documents/upload/{job_id}/status to check progress.
+
+    Supported formats: PDF, TXT, DOCX, CSV, MD, JSON, and code files.
+
+    Args:
+        files: List of files to upload
+        collection_id: Collection to add documents to (default: "default")
+
+    Returns:
+        Job details including job_id for tracking progress
+    """
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files provided",
+        )
+
+    # Validate collection exists
+    try:
+        get_indexer(collection_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    # Validate all files have supported extensions
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
+    for file in files:
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File {file.filename} has unsupported type. Supported: PDF, TXT, DOCX, CSV, MD, JSON, JSONL, and code files",
+            )
+
+    # Create temp directory for staging files
+    temp_dir = Path(tempfile.mkdtemp(prefix="asymptote_upload_"))
+
+    staged_files = []
+    try:
+        for file in files:
+            # Preserve relative path context by replacing separators
+            raw_filename = file.filename.replace('\\', '/').lstrip('/')
+            if '/' in raw_filename:
+                safe_filename = raw_filename.replace('/', '_')
+            else:
+                safe_filename = raw_filename
+
+            # Save to temp location (use thread to avoid blocking)
+            temp_path = temp_dir / safe_filename
+
+            async def save_file(file_obj, path):
+                def _save():
+                    with open(path, "wb") as f:
+                        shutil.copyfileobj(file_obj.file, f)
+                await asyncio.to_thread(_save)
+
+            await save_file(file, temp_path)
+
+            staged_files.append({
+                "temp_path": str(temp_path),
+                "filename": safe_filename,
+            })
+
+        # Start background upload job (runs in separate thread)
+        job_id = upload_service.start_upload(staged_files, collection_id)
+
+        # Get initial job status
+        job_status = upload_service.get_job_status(job_id)
+
+        return UploadJobResponse(
+            job_id=job_status["job_id"],
+            collection_id=job_status["collection_id"],
+            status=job_status["status"],
+            total_files=job_status["total_files"],
+            processed_files=job_status["processed_files"],
+            current_file=job_status["current_file"],
+            progress_percent=job_status["progress_percent"],
+            error=job_status["error"],
+            result_summary=job_status["result_summary"],
+            started_at=job_status["started_at"],
+            completed_at=job_status["completed_at"],
+        )
+
+    except RuntimeError as e:
+        # Clean up temp files if job couldn't start
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except Exception as e:
+        # Clean up temp files on any error
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start upload: {str(e)}",
+        )
+
+
+@app.get(
+    "/documents/upload/{job_id}/status",
+    response_model=UploadJobResponse,
+    summary="Get upload job status",
+    tags=["documents"],
+)
+async def get_upload_status(job_id: int) -> UploadJobResponse:
+    """
+    Get the status of a background upload job.
+
+    Poll this endpoint every 1-2 seconds while status is 'pending' or 'running'.
+
+    Args:
+        job_id: The job ID returned from /documents/upload-async
+
+    Returns:
+        Current job status including progress percentage
+    """
+    job_status = upload_service.get_job_status(job_id)
+
+    if not job_status:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload job {job_id} not found",
+        )
+
+    return UploadJobResponse(
+        job_id=job_status["job_id"],
+        collection_id=job_status["collection_id"],
+        status=job_status["status"],
+        total_files=job_status["total_files"],
+        processed_files=job_status["processed_files"],
+        current_file=job_status["current_file"],
+        progress_percent=job_status["progress_percent"],
+        error=job_status["error"],
+        result_summary=job_status["result_summary"],
+        started_at=job_status["started_at"],
+        completed_at=job_status["completed_at"],
+        # v4.0: Granular progress
+        phase=job_status.get("phase"),
+        phase_progress=job_status.get("phase_progress"),
+        phase_detail=job_status.get("phase_detail"),
+        chunks_processed=job_status.get("chunks_processed"),
+        chunks_total=job_status.get("chunks_total"),
+    )
+
+
+@app.get(
+    "/documents/upload/active",
+    response_model=List[UploadJobResponse],
+    summary="Get all active upload jobs",
+    tags=["documents"],
+)
+async def get_active_upload_jobs() -> List[UploadJobResponse]:
+    """
+    Get all active (pending/running) upload jobs.
+
+    Use this endpoint on page load to restore the notification bell state.
+
+    Returns:
+        List of active upload jobs
+    """
+    from services.app_database import app_db
+
+    active_jobs = app_db.get_all_active_upload_jobs()
+
+    result = []
+    for job in active_jobs:
+        # Calculate progress
+        progress = 0
+        if job["total_files"] > 0:
+            progress = round((job["processed_files"] / job["total_files"]) * 100, 1)
+
+        result.append(UploadJobResponse(
+            job_id=job["id"],
+            collection_id=job["collection_id"],
+            status=job["status"],
+            total_files=job["total_files"],
+            processed_files=job["processed_files"],
+            current_file=job["current_file"],
+            progress_percent=progress,
+            error=job["error"],
+            result_summary=None,  # Don't parse JSON here for list view
+            started_at=job["started_at"],
+            completed_at=job["completed_at"],
+            # v4.0: Granular progress
+            phase=job.get("phase"),
+            phase_progress=job.get("phase_progress"),
+            phase_detail=job.get("phase_detail"),
+            chunks_processed=job.get("chunks_processed"),
+            chunks_total=job.get("chunks_total"),
+        ))
+
+    return result
+
+
+@app.get(
+    "/documents/upload/{job_id}/stream",
+    summary="Stream real-time upload progress via SSE",
+    tags=["documents"],
+)
+async def stream_upload_progress(job_id: int):
+    """
+    Stream real-time progress updates for an upload job via Server-Sent Events (SSE).
+
+    This endpoint provides instant updates without polling. Connect using EventSource
+    in JavaScript to receive progress events as they happen.
+
+    Event types:
+    - file_start: A new file is starting to process
+    - phase_progress: Progress within a phase (extracting, chunking, embedding, saving)
+    - file_complete: A file finished processing
+    - file_error: A file failed to process
+    - job_complete: All files processed successfully
+    - job_error: Job failed with error
+    - job_cancelled: Job was cancelled by user
+
+    Example JavaScript:
+    ```javascript
+    const eventSource = new EventSource(`/documents/upload/${jobId}/stream`);
+    eventSource.addEventListener('phase_progress', (e) => {
+        const data = JSON.parse(e.data);
+        console.log(`${data.phase}: ${data.phase_progress}%`);
+    });
+    eventSource.addEventListener('job_complete', () => {
+        eventSource.close();
+    });
+    ```
+
+    Args:
+        job_id: The job ID returned from /documents/upload-async
+
+    Returns:
+        SSE stream of progress events
+    """
+    import queue
+
+    # Check job exists
+    job_status = upload_service.get_job_status(job_id)
+    if not job_status:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload job {job_id} not found",
+        )
+
+    # Subscribe to events
+    event_queue = upload_service.subscribe_to_events(job_id)
+
+    async def event_generator():
+        """Generate SSE events from the queue."""
+        try:
+            # Send initial status
+            initial_data = {
+                "job_id": job_id,
+                "event_type": "connected",
+                "phase": job_status.get("phase") or "pending",
+                "overall_percent": job_status.get("progress_percent", 0),
+                "current_file": job_status.get("current_file"),
+                "file_index": job_status.get("processed_files", 0),
+                "total_files": job_status.get("total_files", 0),
+            }
+            yield f"event: connected\ndata: {json.dumps(initial_data)}\n\n"
+
+            # If job is already complete, send final event and close
+            if job_status["status"] in ("completed", "failed", "cancelled"):
+                final_data = {
+                    "job_id": job_id,
+                    "event_type": f"job_{job_status['status']}",
+                    "phase": job_status["status"],
+                }
+                yield f"event: job_{job_status['status']}\ndata: {json.dumps(final_data)}\n\n"
+                return
+
+            # Stream events from queue
+            while True:
+                try:
+                    # Use asyncio to check queue with timeout
+                    event = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: event_queue.get(timeout=30)
+                    )
+
+                    # Send SSE event
+                    yield event.to_sse()
+
+                    # Check for terminal events
+                    if event.event_type in ("job_complete", "job_error", "job_cancelled"):
+                        break
+
+                except queue.Empty:
+                    # Send keepalive ping every 30 seconds
+                    yield ": keepalive\n\n"
+
+        except asyncio.CancelledError:
+            # Client disconnected
+            pass
+        finally:
+            # Unsubscribe from events
+            upload_service.unsubscribe_from_events(job_id, event_queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+@app.post(
+    "/documents/upload/{job_id}/cancel",
+    summary="Cancel a running upload job",
+    tags=["documents"],
+)
+async def cancel_upload_job(job_id: int):
+    """
+    Request cancellation of a running upload job.
+
+    The job will be marked as cancelled after the current file finishes processing.
+    Already-indexed files will remain in the collection.
+
+    Args:
+        job_id: The job ID to cancel
+
+    Returns:
+        Cancellation status
+    """
+    # Check job exists and is active
+    job_status = upload_service.get_job_status(job_id)
+    if not job_status:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Upload job {job_id} not found",
+        )
+
+    if job_status["status"] not in ("pending", "running"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Job {job_id} is not active (status: {job_status['status']})",
+        )
+
+    # Request cancellation - try normal cancellation first, then force if thread not found
+    cancelled = upload_service.cancel_job(job_id)
+
+    if cancelled:
+        return {
+            "message": f"Cancellation requested for job {job_id}",
+            "job_id": job_id,
+            "status": "cancelling",
+        }
+
+    # Thread not in active list - try force cancellation for orphaned jobs
+    logger.warning(f"Job {job_id} thread not found, attempting force cancellation")
+    force_cancelled = upload_service.cancel_job(job_id, force=True)
+
+    if force_cancelled:
+        return {
+            "message": f"Job {job_id} force-cancelled (thread was not active)",
+            "job_id": job_id,
+            "status": "cancelled",
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cancel job {job_id}",
+        )
+
+
+@app.post(
     "/documents/upload-repo",
     response_model=RepoUploadResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload and index a code repository or folder",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Upload and index a code repository or folder (async)",
     tags=["documents"],
 )
 async def upload_repository(
     request: RepoUploadRequest,
 ) -> RepoUploadResponse:
     """
-    Scan a local repository or folder and index all supported files.
+    Scan a local repository or folder and start indexing in the background.
 
-    This endpoint is optimized for indexing code repositories, especially
-    legacy Pascal/Delphi/Modula-2/Assembly codebases.
+    This endpoint returns immediately with a job_id. Use GET /upload-jobs/{job_id}
+    to track progress.
 
     **Supported file types:**
     - Documents: PDF, TXT, DOCX, CSV, MD, JSON
-    - Code: .pas, .dpr, .dpk, .pp, .inc, .dfm (Pascal/Delphi)
-    - Code: .mod, .def, .mi (Modula-2)
-    - Code: .asm, .s (Assembly)
+    - Code: Python, JavaScript, TypeScript, C#, Java, Go, Rust, C/C++, PHP, Ruby, Swift, Kotlin, Scala
+    - Legacy: Pascal/Delphi, Modula-2, Assembly
 
     **Code-aware chunking:**
     Code files are intelligently chunked to preserve symbol boundaries
@@ -339,23 +728,12 @@ async def upload_repository(
             - path: Local filesystem path to scan
             - collection_id: Target collection (default: "default")
             - recursive: Whether to scan subdirectories (default: True)
-            - include_patterns: Glob patterns to include (optional)
-            - exclude_patterns: Glob patterns to exclude (defaults exclude common directories)
+            - file_extensions: List of extensions to include (optional)
+            - exclude_patterns: Glob patterns to exclude
 
-    Example:
-        ```json
-        {
-            "path": "C:/Projects/LegacyApp/src",
-            "collection_id": "legacy-code",
-            "recursive": true,
-            "include_patterns": ["*.pas", "*.dpr", "*.asm"],
-            "exclude_patterns": ["**/backup/**", "**/old/**"]
-        }
-        ```
+    Returns:
+        Response with job_id for tracking progress
     """
-    import fnmatch
-    import os
-
     repo_path = Path(request.path)
 
     if not repo_path.exists():
@@ -370,137 +748,54 @@ async def upload_repository(
             detail=f"Path is not a directory: {request.path}",
         )
 
-    # Get indexer for the collection
+    # Verify collection exists
     try:
-        indexer = get_indexer(request.collection_id)
+        get_indexer(request.collection_id)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e),
         )
 
-    # Get document directory for this collection
-    document_dir = indexer_manager.get_documents_path(request.collection_id)
+    # Build file extensions list from include_patterns or use defaults
+    file_extensions = None
+    if request.include_patterns:
+        # Convert glob patterns like "*.py" to extensions like ".py"
+        file_extensions = []
+        for pattern in request.include_patterns:
+            if pattern.startswith("*."):
+                file_extensions.append("." + pattern[2:].lower())
+    elif hasattr(request, 'file_extensions') and request.file_extensions:
+        file_extensions = request.file_extensions
 
-    # Determine supported extensions based on include_patterns or default
-    all_supported = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json'} | SUPPORTED_CODE_EXTENSIONS
-
-    # Collect all files to process
-    files_to_index = []
-
-    def should_exclude(file_path: Path) -> bool:
-        """Check if file matches any exclude pattern."""
-        rel_path = str(file_path.relative_to(repo_path))
-        for pattern in (request.exclude_patterns or []):
-            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(rel_path.replace('\\', '/'), pattern):
-                return True
-        return False
-
-    def should_include(file_path: Path) -> bool:
-        """Check if file matches include patterns (or all supported if none specified)."""
-        if request.include_patterns:
-            filename = file_path.name
-            for pattern in request.include_patterns:
-                if fnmatch.fnmatch(filename, pattern):
-                    return True
-            return False
-        else:
-            # No include patterns = use all supported extensions
-            return file_path.suffix.lower() in all_supported
-
-    # Walk the directory tree
-    if request.recursive:
-        for root, dirs, files in os.walk(repo_path):
-            # Filter out excluded directories to speed up traversal
-            dirs[:] = [d for d in dirs if not should_exclude(Path(root) / d)]
-
-            for filename in files:
-                file_path = Path(root) / filename
-                if not should_exclude(file_path) and should_include(file_path):
-                    files_to_index.append(file_path)
-    else:
-        for file_path in repo_path.iterdir():
-            if file_path.is_file() and not should_exclude(file_path) and should_include(file_path):
-                files_to_index.append(file_path)
-
-    if not files_to_index:
-        return RepoUploadResponse(
-            message=f"No matching files found in {request.path}",
-            files_found=0,
-            files_indexed=0,
-            files_failed=0,
-            total_chunks=0,
-            document_ids=[],
-            failed_files=[],
+    try:
+        # Start background job
+        job_id = upload_service.start_repo_index(
+            repo_path=request.path,
+            collection_id=request.collection_id,
+            recursive=request.recursive,
+            file_extensions=file_extensions,
+            exclude_patterns=request.exclude_patterns,
         )
 
-    logger.info(f"Found {len(files_to_index)} files to index from {request.path}")
+        return RepoUploadResponse(
+            message=f"Repository indexing started. Use GET /upload-jobs/{job_id} to track progress.",
+            job_id=job_id,
+            files_found=0,  # Will be updated as job progresses
+        )
 
-    # Index each file
-    indexed_docs = []
-    failed_docs = []
-    total_chunks = 0
-
-    for file_path in files_to_index:
-        try:
-            # Create a unique filename that preserves some path context
-            # Use relative path with separators replaced to avoid collisions
-            rel_path = file_path.relative_to(repo_path)
-            # Replace path separators with underscores for safe filename
-            safe_filename = str(rel_path).replace('/', '_').replace('\\', '_')
-
-            # Copy file to collection's document directory
-            dest_path = document_dir / safe_filename
-            shutil.copy2(file_path, dest_path)
-
-            logger.info(f"Indexing: {rel_path}")
-
-            # Index the document
-            doc_metadata = indexer.index_document(dest_path, safe_filename)
-
-            # Register document with collection
-            collection_service.add_document(request.collection_id, doc_metadata.document_id)
-
-            indexed_docs.append(doc_metadata.document_id)
-            total_chunks += doc_metadata.total_chunks
-
-        except Exception as e:
-            logger.error(f"Failed to index {file_path}: {e}")
-            failed_docs.append({
-                "filename": str(file_path.relative_to(repo_path)),
-                "error": str(e)
-            })
-            # Clean up if copy succeeded but indexing failed
-            try:
-                rel_path = file_path.relative_to(repo_path)
-                safe_filename = str(rel_path).replace('/', '_').replace('\\', '_')
-                cleanup_path = document_dir / safe_filename
-                if cleanup_path.exists():
-                    cleanup_path.unlink()
-            except Exception:
-                pass
-
-    # Persist the index if any documents were successfully indexed
-    if indexed_docs:
-        indexer.save_index()
-
-    # Build response message
-    if failed_docs and not indexed_docs:
-        message = f"All {len(failed_docs)} files failed to index from {request.path}"
-    elif failed_docs:
-        message = f"Indexed {len(indexed_docs)} files from {request.path}. {len(failed_docs)} files failed."
-    else:
-        message = f"Successfully indexed {len(indexed_docs)} files from {request.path}"
-
-    return RepoUploadResponse(
-        message=message,
-        files_found=len(files_to_index),
-        files_indexed=len(indexed_docs),
-        files_failed=len(failed_docs),
-        total_chunks=total_chunks,
-        document_ids=indexed_docs,
-        failed_files=failed_docs,
-    )
+    except ValueError as e:
+        # No files found
+        return RepoUploadResponse(
+            message=str(e),
+            files_found=0,
+        )
+    except RuntimeError as e:
+        # Job already running
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
 
 
 @app.post(
@@ -577,6 +872,8 @@ async def search_documents(
             top_k=search_request.top_k,
             ai_service=ai_service,
             ai_options=ai_options,
+            mode=search_request.mode,
+            semantic_weight=search_request.semantic_weight,
         )
 
         results = search_result["results"]
@@ -628,6 +925,378 @@ async def search_documents(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}",
+        )
+
+
+# Local File Reference endpoints (v3.1 feature)
+
+@app.post(
+    "/api/file-picker",
+    summary="Open native file picker dialog",
+    tags=["desktop"],
+)
+async def open_file_picker(multiple: bool = True, include_sizes: bool = False):
+    """
+    Open a native OS file picker dialog.
+
+    This endpoint is designed for desktop app usage where the server
+    runs locally on the user's machine.
+
+    Args:
+        multiple: If True, allow selecting multiple files (default: True)
+        include_sizes: If True, include file sizes in response (default: False)
+
+    Returns:
+        {"paths": ["C:/path/to/file1.pdf", ...], "sizes": {"C:/path/to/file1.pdf": 12345, ...}}
+    """
+    from services.file_picker import open_file_dialog
+    import os
+
+    try:
+        paths = open_file_dialog(multiple=multiple)
+        result = {"paths": paths}
+
+        if include_sizes and paths:
+            sizes = {}
+            for path in paths:
+                try:
+                    sizes[path] = os.path.getsize(path)
+                except OSError:
+                    sizes[path] = 0
+            result["sizes"] = sizes
+
+        return result
+    except Exception as e:
+        logger.error(f"File picker error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to open file picker: {str(e)}",
+        )
+
+
+@app.post(
+    "/api/folder-picker",
+    summary="Open native folder picker dialog",
+    tags=["desktop"],
+)
+async def open_folder_picker_endpoint():
+    """
+    Open a native OS folder picker dialog.
+
+    This endpoint is designed for desktop app usage where the server
+    runs locally on the user's machine.
+
+    Returns:
+        {"path": "C:/path/to/folder"} or {"path": null} if cancelled
+    """
+    from services.file_picker import open_folder_dialog
+
+    try:
+        path = open_folder_dialog()
+        return {"path": path}
+    except Exception as e:
+        logger.error(f"Folder picker error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to open folder picker: {str(e)}",
+        )
+
+
+class ScanFolderRequest(BaseModel):
+    """Request body for scanning a folder."""
+    path: str
+    recursive: bool = True
+    file_extensions: Optional[List[str]] = None
+
+
+@app.post(
+    "/api/scan-folder",
+    summary="Scan folder and return list of supported files",
+    tags=["desktop"],
+)
+async def scan_folder(request: ScanFolderRequest):
+    """
+    Scan a folder and return the list of supported files found.
+
+    This is a lightweight operation that just lists files - no indexing.
+    Use this to preview what files will be indexed before starting.
+    """
+    import os
+    import fnmatch
+
+    folder_path = Path(request.path)
+
+    if not folder_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path does not exist: {request.path}",
+        )
+
+    if not folder_path.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Path is not a directory: {request.path}",
+        )
+
+    # Default exclude patterns
+    default_excludes = [
+        'node_modules', '.git', '__pycache__', 'venv', '.venv',
+        'dist', 'build', '.idea', '.vscode', 'target', 'bin', 'obj'
+    ]
+
+    # Determine which extensions to look for
+    all_supported = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
+    extensions_filter = set(request.file_extensions) if request.file_extensions else all_supported
+
+    files_found = []
+
+    def should_skip_dir(dirname: str) -> bool:
+        return dirname in default_excludes or dirname.startswith('.')
+
+    if request.recursive:
+        for root, dirs, files in os.walk(folder_path):
+            # Filter out excluded directories
+            dirs[:] = [d for d in dirs if not should_skip_dir(d)]
+
+            for filename in files:
+                file_path = Path(root) / filename
+                if file_path.suffix.lower() in extensions_filter:
+                    files_found.append({
+                        "path": str(file_path),
+                        "name": filename,
+                        "relative_path": str(file_path.relative_to(folder_path)),
+                        "size": file_path.stat().st_size if file_path.exists() else 0
+                    })
+    else:
+        for file_path in folder_path.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in extensions_filter:
+                files_found.append({
+                    "path": str(file_path),
+                    "name": file_path.name,
+                    "relative_path": file_path.name,
+                    "size": file_path.stat().st_size if file_path.exists() else 0
+                })
+
+    # Sort by relative path for consistent display
+    files_found.sort(key=lambda f: f["relative_path"])
+
+    return {
+        "folder": request.path,
+        "files": files_found,
+        "total": len(files_found)
+    }
+
+
+class IndexLocalRequest(BaseModel):
+    """Request body for indexing local files."""
+    file_path: str
+    collection_id: str = "default"
+    copy_to_library: bool = False  # If True, copy file to data/documents/ instead of indexing in-place
+
+
+@app.post(
+    "/documents/index-local",
+    response_model=DocumentMetadata,
+    status_code=status.HTTP_201_CREATED,
+    summary="Index a local file without uploading",
+    tags=["documents"],
+)
+async def index_local_file(request: IndexLocalRequest) -> DocumentMetadata:
+    """
+    Index a file directly from the local filesystem without copying it.
+
+    The file remains in its original location and is read directly
+    during indexing and when serving to users.
+
+    This is useful for:
+    - Large files that would be slow to upload
+    - Files that shouldn't be duplicated
+    - Desktop app usage where files are already local
+
+    Args:
+        request: Contains file_path and collection_id
+
+    Returns:
+        DocumentMetadata for the indexed document
+    """
+    from services.code_extractor import SUPPORTED_CODE_EXTENSIONS
+
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
+
+    path = Path(request.file_path)
+
+    # Validate path exists
+    if not path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File not found: {request.file_path}",
+        )
+
+    # Validate it's a file
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Not a file: {request.file_path}",
+        )
+
+    # Validate extension
+    file_ext = path.suffix.lower()
+    if file_ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {file_ext}. Supported: PDF, TXT, DOCX, CSV, MD, JSON, JSONL, and code files",
+        )
+
+    # Get indexer for the collection
+    try:
+        indexer = get_indexer(request.collection_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+    try:
+        if request.copy_to_library:
+            # Copy file to data/documents/ directory first, then index
+            document_dir = settings.data_dir / "documents"
+            document_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = document_dir / path.name
+
+            # Handle duplicate filenames
+            counter = 1
+            while dest_path.exists():
+                stem = path.stem
+                suffix = path.suffix
+                dest_path = document_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+
+            shutil.copy2(path, dest_path)
+            logger.info(f"Copied file to library: {path} -> {dest_path}")
+
+            # Index from the copied location
+            doc_metadata = indexer.index_document(dest_path, dest_path.name)
+
+            # Standard upload behavior - no source_path reference
+            doc_metadata.source_type = "upload"
+
+        else:
+            # Index directly from source path (no copy)
+            doc_metadata = indexer.index_document(path, path.name)
+
+            # Update metadata with source path info
+            indexer.vector_store.metadata_store.update_document_source(
+                doc_metadata.document_id,
+                source_path=str(path.absolute()),
+                source_type="local_reference"
+            )
+
+            # Return updated metadata
+            doc_metadata.source_path = str(path.absolute())
+            doc_metadata.source_type = "local_reference"
+
+        # Register document with collection
+        collection_service.add_document(request.collection_id, doc_metadata.document_id)
+
+        # Persist the index
+        indexer.save_index()
+
+        logger.info(f"Indexed local file: {path} -> {doc_metadata.document_id} (copy={request.copy_to_library})")
+        return doc_metadata
+
+    except Exception as e:
+        logger.error(f"Failed to index local file {request.file_path}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to index file: {str(e)}",
+        )
+
+
+class IndexLocalAsyncRequest(BaseModel):
+    """Request body for async local file indexing."""
+    file_paths: List[str]
+    collection_id: str = "default"
+    copy_to_library: bool = False
+
+
+@app.post(
+    "/documents/index-local-async",
+    response_model=UploadJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Index local files in background",
+    tags=["documents"],
+)
+async def index_local_files_async(request: IndexLocalAsyncRequest) -> UploadJobResponse:
+    """
+    Start a background job to index local files.
+
+    This is useful for indexing multiple files or large files without
+    blocking the UI. Progress can be tracked via /documents/upload-status/{job_id}.
+
+    Args:
+        request: Contains list of file paths, collection_id, and copy_to_library flag
+
+    Returns:
+        UploadJobResponse with job_id for tracking progress
+    """
+    from services.code_extractor import SUPPORTED_CODE_EXTENSIONS
+
+    SUPPORTED_EXTENSIONS = {'.pdf', '.txt', '.docx', '.csv', '.md', '.json', '.jsonl'} | SUPPORTED_CODE_EXTENSIONS
+
+    # Validate all paths exist and are supported
+    valid_paths = []
+    for file_path in request.file_paths:
+        path = Path(file_path)
+        if not path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File not found: {file_path}",
+            )
+        if not path.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Not a file: {file_path}",
+            )
+        file_ext = path.suffix.lower()
+        if file_ext not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported file type: {file_ext} for {path.name}",
+            )
+        valid_paths.append(file_path)
+
+    if not valid_paths:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid files to index",
+        )
+
+    try:
+        job_id = upload_service.start_local_index(
+            file_paths=valid_paths,
+            collection_id=request.collection_id,
+            copy_to_library=request.copy_to_library,
+        )
+
+        return UploadJobResponse(
+            job_id=job_id,
+            collection_id=request.collection_id,
+            status="pending",
+            total_files=len(valid_paths),
+            processed_files=0,
+            progress_percent=0.0,
+        )
+
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Failed to start local index job: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start indexing: {str(e)}",
         )
 
 
@@ -776,12 +1445,28 @@ async def ask_question(
             detail=str(e),
         )
 
-    # Search for relevant chunks
+    # Search for relevant chunks based on mode
+    from models.schemas import SearchMode
     try:
-        search_results = indexer.vector_store.search(
-            indexer.embedding_service.embed_query(request.question),
-            top_k=request.top_k,
-        )
+        if request.mode == SearchMode.KEYWORD:
+            # Pure BM25 keyword search
+            bm25_results = indexer.vector_store.bm25_index.search(request.question, request.top_k)
+            search_results = indexer._bm25_to_search_results(bm25_results)
+        elif request.mode == SearchMode.HYBRID:
+            # Combined semantic + keyword search
+            query_embedding = indexer.embedding_service.embed_query(request.question)
+            search_results = indexer.vector_store.search_hybrid(
+                query=request.question,
+                query_embedding=query_embedding,
+                top_k=request.top_k,
+                semantic_weight=request.semantic_weight,
+            )
+        else:
+            # Default: pure semantic search
+            search_results = indexer.vector_store.search(
+                indexer.embedding_service.embed_query(request.question),
+                top_k=request.top_k,
+            )
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(
@@ -1622,17 +2307,29 @@ async def list_documents(
         # Convert to DocumentMetadata objects
         doc_metadata_list = []
         for doc in documents:
-            # Get timestamp from document file modification time
-            doc_path = document_dir / doc["filename"]
-            indexed_at = ""
-            if doc_path.exists():
+            # Determine file path based on source type
+            # Handle None values from database by defaulting to "upload"
+            source_type = doc.get("source_type") or "upload"
+            source_path = doc.get("source_path")
+
+            if source_type == "local_reference" and source_path:
+                # Local reference - use source_path
+                doc_path = Path(source_path)
+            else:
+                # Uploaded file - use documents directory
+                doc_path = document_dir / doc["filename"]
+
+            # Get timestamp from file modification time or upload_timestamp
+            # Handle None values by defaulting to empty string
+            indexed_at = doc.get("upload_timestamp") or ""
+            if not indexed_at and doc_path.exists():
                 from datetime import datetime
                 mtime = doc_path.stat().st_mtime
                 indexed_at = datetime.fromtimestamp(mtime).isoformat()
 
             # Handle both field naming conventions (total_pages/num_pages, total_chunks/num_chunks)
-            total_pages = doc.get("total_pages") or doc.get("num_pages", 0)
-            total_chunks = doc.get("total_chunks") or doc.get("num_chunks", 0)
+            total_pages = doc.get("total_pages") or doc.get("num_pages") or 0
+            total_chunks = doc.get("total_chunks") or doc.get("num_chunks") or 0
 
             doc_metadata = DocumentMetadata(
                 document_id=doc["document_id"],
@@ -1640,6 +2337,8 @@ async def list_documents(
                 total_pages=total_pages,
                 total_chunks=total_chunks,
                 indexed_at=indexed_at,
+                source_type=source_type,
+                source_path=source_path,
             )
             doc_metadata_list.append(doc_metadata)
 
@@ -1688,27 +2387,35 @@ async def get_pdf(
         # Get document directory for this collection
         document_dir = indexer_manager.get_documents_path(collection_id)
 
-        # Get document metadata to find filename
-        documents = indexer.list_documents()
-        doc = next((d for d in documents if d["document_id"] == document_id), None)
+        # Get document metadata to find filename and source info
+        doc_info = indexer.vector_store.metadata_store.get_document_info(document_id)
 
-        if not doc:
+        if not doc_info:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
             )
 
-        # Find the document file
-        doc_path = document_dir / doc["filename"]
-
-        if not doc_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document file not found: {doc['filename']}",
-            )
+        # Determine file path based on source type
+        if doc_info.get("source_type") == "local_reference" and doc_info.get("source_path"):
+            # Local reference - serve from original location
+            doc_path = Path(doc_info["source_path"])
+            if not doc_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Source file no longer exists at: {doc_info['source_path']}. The file may have been moved or deleted.",
+                )
+        else:
+            # Uploaded file - serve from collection's documents directory
+            doc_path = document_dir / doc_info["filename"]
+            if not doc_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Document file not found: {doc_info['filename']}",
+                )
 
         # Determine media type based on file extension
-        file_ext = Path(doc["filename"]).suffix.lower()
+        file_ext = Path(doc_info["filename"]).suffix.lower()
         media_types = {
             '.pdf': 'application/pdf',
             '.txt': 'text/plain',
@@ -1740,7 +2447,7 @@ async def get_pdf(
             path=doc_path,
             media_type=media_type,
             headers={
-                "Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'
+                "Content-Disposition": f'{disposition}; filename="{doc_info["filename"]}"'
             }
         )
 
@@ -1774,7 +2481,8 @@ async def delete_document(
     This will delete:
     - The document's metadata from the index
     - All chunks associated with the document
-    - The document file from the collection's documents directory
+    - For uploaded files: the document file from the collection's documents directory
+    - For local references: only the index (original file is NOT deleted)
     """
     try:
         # Get indexer for the collection
@@ -1789,11 +2497,10 @@ async def delete_document(
         # Get document directory for this collection
         document_dir = indexer_manager.get_documents_path(collection_id)
 
-        # Get document metadata before deletion to find the PDF filename
-        documents = indexer.list_documents()
-        doc = next((d for d in documents if d["document_id"] == document_id), None)
+        # Get document metadata before deletion (including source info)
+        doc_info = indexer.vector_store.metadata_store.get_document_info(document_id)
 
-        if not doc:
+        if not doc_info:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Document {document_id} not found",
@@ -1805,20 +2512,28 @@ async def delete_document(
         # Remove document from collection tracking
         collection_service.remove_document(collection_id, document_id)
 
-        # Delete document file from filesystem
-        doc_path = document_dir / doc["filename"]
-        if doc_path.exists():
-            doc_path.unlink()
-            logger.info(f"Deleted document file: {doc['filename']}")
+        # Only delete file from filesystem if it was uploaded (not a local reference)
+        file_deleted = False
+        is_local_reference = doc_info.get("source_type") == "local_reference"
+
+        if not is_local_reference:
+            doc_path = document_dir / doc_info["filename"]
+            if doc_path.exists():
+                doc_path.unlink()
+                file_deleted = True
+                logger.info(f"Deleted document file: {doc_info['filename']}")
+        else:
+            logger.info(f"Skipping file deletion for local reference: {doc_info.get('source_path')}")
 
         # Persist the changes
         indexer.save_index()
 
         return {
             "message": f"Deleted document {document_id}",
-            "filename": doc["filename"],
+            "filename": doc_info["filename"],
             "chunks_deleted": num_deleted,
-            "file_deleted": True,
+            "file_deleted": file_deleted,
+            "was_local_reference": is_local_reference,
         }
 
     except HTTPException:

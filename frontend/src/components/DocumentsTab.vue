@@ -2,105 +2,131 @@
   <div class="space-y-6">
     <h2 class="text-2xl font-bold">Documents</h2>
 
-    <!-- Upload Section -->
+    <!-- Index Documents Section -->
     <div class="card bg-base-200">
       <div class="card-body">
-        <h3 class="card-title">Upload Documents</h3>
+        <h3 class="card-title">Index Documents</h3>
 
-        <!-- Upload Mode Toggle -->
-        <div role="tablist" class="tabs tabs-bordered mb-2">
+        <!-- File/Folder Picker Buttons -->
+        <div class="flex flex-wrap gap-3 mt-2">
           <button
-            role="tab"
-            class="tab gap-2"
-            :class="{ 'tab-active': uploadMode === 'files' }"
-            @click="setUploadMode('files')"
+            @click="openFilePicker"
+            class="btn btn-primary"
+            :disabled="indexing"
           >
-            <FileText :size="16" />
-            Select Files
+            <FileText :size="20" />
+            Select Files...
           </button>
           <button
-            role="tab"
-            class="tab gap-2"
-            :class="{ 'tab-active': uploadMode === 'folder' }"
-            @click="setUploadMode('folder')"
+            @click="openFolderPicker"
+            class="btn btn-outline"
+            :disabled="indexing"
           >
-            <FolderOpen :size="16" />
-            Select Folder
+            <FolderOpen :size="20" />
+            Select Folder...
           </button>
         </div>
 
-        <!-- File Upload Input -->
-        <div v-if="uploadMode === 'files'" class="form-control w-full">
-          <input
-            ref="fileInput"
-            type="file"
-            multiple
-            accept=".pdf,.txt,.docx,.csv,.md,.json,.pas,.dpr,.dpk,.pp,.inc,.dfm,.mod,.def,.mi,.asm,.s"
-            class="file-input file-input-bordered w-full"
-            @change="handleFileSelect"
-          />
-          <label class="label">
-            <span class="label-text-alt">Documents or Code files (Pascal, Delphi, Modula-2, Assembly)</span>
-          </label>
-        </div>
+        <p class="text-sm text-base-content/60 mt-2">
+          Select files or a folder to index. Supported: PDF, TXT, DOCX, CSV, MD, JSON, JSONL
+        </p>
 
-        <!-- Folder Upload Input -->
-        <div v-if="uploadMode === 'folder'" class="form-control w-full">
-          <input
-            ref="folderInput"
-            type="file"
-            webkitdirectory
-            directory
-            class="file-input file-input-bordered w-full"
-            @change="handleFolderSelect"
-          />
-          <label class="label">
-            <span class="label-text-alt">Select a folder - documents and code files will be uploaded</span>
-          </label>
-        </div>
-
-        <!-- Selected Files -->
-        <div v-if="selectedFiles.length > 0" class="space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="text-sm font-semibold">{{ selectedFiles.length }} file{{ selectedFiles.length !== 1 ? 's' : '' }} selected ({{ formatTotalSize() }})</span>
-            <div class="flex gap-2">
-              <button
-                class="btn btn-ghost btn-sm"
-                @click="clearAllFiles"
-                :disabled="uploading"
-              >
-                Clear
-              </button>
-              <button
-                class="btn btn-primary btn-sm"
-                @click="upload"
-                :disabled="uploading || selectedFiles.length === 0"
-              >
-                <span v-if="uploading" class="loading loading-spinner loading-sm"></span>
-                <CloudUpload v-else :size="16" />
-                {{ uploading ? 'Indexing...' : 'Upload Now' }}
-              </button>
+        <!-- Selected Items -->
+        <div v-if="selectedPaths.length > 0" class="mt-4 space-y-3">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <span class="text-sm font-semibold">
+              {{ selectedPaths.length }} item{{ selectedPaths.length !== 1 ? 's' : '' }} selected
+            </span>
+            <div class="flex items-center gap-4">
+              <!-- Copy Toggle -->
+              <label class="label cursor-pointer gap-2">
+                <span class="label-text text-sm">Copy to library</span>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-sm"
+                  v-model="copyToLibrary"
+                  :disabled="indexing"
+                />
+              </label>
+              <!-- Background Toggle -->
+              <label class="label cursor-pointer gap-2">
+                <span class="label-text text-sm">Background</span>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-sm toggle-secondary"
+                  v-model="useBackgroundIndexing"
+                  :disabled="indexing"
+                />
+              </label>
+              <div class="flex gap-2">
+                <button
+                  class="btn btn-ghost btn-sm"
+                  @click="clearAllPaths"
+                  :disabled="indexing"
+                >
+                  Clear
+                </button>
+                <button
+                  class="btn btn-primary btn-sm"
+                  @click="indexFiles"
+                  :disabled="indexing || selectedPaths.length === 0"
+                >
+                  <span v-if="indexing" class="loading loading-spinner loading-sm"></span>
+                  <FileSearch v-else :size="16" />
+                  {{ indexing ? 'Indexing...' : 'Index' }}
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- Large File Warning -->
-          <div v-if="hasLargeFiles()" class="alert alert-warning alert-sm">
-            <AlertTriangle :size="20" />
-            <span class="text-xs">Large file(s) detected. Estimated time: {{ estimateProcessingTime() }}</span>
+          <!-- Mode explanations -->
+          <div class="text-xs text-base-content/50 space-y-1">
+            <div>
+              <span v-if="copyToLibrary">
+                Files will be copied to the library. Safe if you move or delete originals.
+              </span>
+              <span v-else>
+                Files will be indexed in-place. No duplication, but search breaks if files are moved.
+              </span>
+            </div>
+            <div v-if="useBackgroundIndexing" class="text-secondary">
+              Background mode: Indexing will run in the background. Track progress via the notification bell.
+            </div>
+          </div>
+
+          <!-- Sync Progress Indicator -->
+          <div v-if="indexing && !useBackgroundIndexing" class="mt-3 space-y-2">
+            <div class="flex items-center justify-between text-sm">
+              <span class="font-medium">{{ indexProgress }} of {{ selectedPaths.filter(p => !p.isFolder).length }} files</span>
+              <span class="text-base-content/60">{{ Math.round(indexProgressPercent) }}%</span>
+            </div>
+            <progress
+              class="progress progress-primary w-full"
+              :value="indexProgressPercent"
+              max="100"
+            ></progress>
+            <div v-if="currentIndexingFile" class="text-xs text-base-content/60 truncate">
+              <span class="opacity-70">Current:</span> {{ currentIndexingFile }}
+            </div>
           </div>
 
           <!-- File List -->
           <div class="overflow-x-auto max-h-48 overflow-y-auto border rounded">
             <table class="table table-xs table-zebra">
               <tbody>
-                <tr v-for="(file, index) in selectedFiles" :key="index">
-                  <td class="truncate max-w-xs" :title="getDisplayPath(file)">{{ getDisplayPath(file) }}</td>
-                  <td class="text-right whitespace-nowrap">{{ formatFileSize(file.size) }}</td>
+                <tr v-for="(item, index) in selectedPaths" :key="index">
+                  <td class="truncate max-w-xs font-medium" :title="item.name">
+                    {{ item.name }}
+                    <span v-if="item.isFolder" class="badge badge-sm badge-ghost ml-1">folder</span>
+                  </td>
+                  <td class="text-xs text-base-content/50 truncate max-w-xs" :title="item.path">
+                    {{ item.path }}
+                  </td>
                   <td class="w-8">
                     <button
                       class="btn btn-ghost btn-xs text-error"
-                      @click="removeFile(index)"
-                      :disabled="uploading"
+                      @click="removePath(index)"
+                      :disabled="indexing"
                     >
                       <X :size="14" />
                     </button>
@@ -111,28 +137,26 @@
           </div>
         </div>
 
-        <!-- Progress -->
-        <div v-if="uploading" class="space-y-2">
-          <progress class="progress progress-primary w-full" :value="uploadProgress" max="100"></progress>
-          <p class="text-xs text-center">Processing files... {{ uploadProgress }}%</p>
+        <!-- Index Success -->
+        <div v-if="indexSuccess" class="alert alert-success alert-sm mt-3">
+          <CheckCircle :size="20" />
+          <div class="text-sm">
+            <span v-if="indexResult.background">
+              <strong>Indexing started in background.</strong>
+              Track progress in the notification bell.
+            </span>
+            <span v-else>
+              Indexed {{ indexResult.count }} file(s), {{ indexResult.chunks }} chunks
+            </span>
+          </div>
+          <button class="btn btn-ghost btn-xs" @click="indexSuccess = false">Dismiss</button>
         </div>
 
-        <!-- Success Alert -->
-        <div v-if="uploadSuccess" class="alert alert-success alert-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span class="text-xs">
-            Uploaded {{ uploadResult.documents_processed }} document(s) - {{ uploadResult.total_pages }} pages, {{ uploadResult.total_chunks }} chunks
-          </span>
-        </div>
-
-        <!-- Upload Error -->
-        <div v-if="uploadError" class="alert alert-error alert-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span class="text-xs">{{ uploadError }}</span>
+        <!-- Index Error -->
+        <div v-if="indexError" class="alert alert-error alert-sm mt-3">
+          <XCircle :size="20" />
+          <span class="text-sm">{{ indexError }}</span>
+          <button class="btn btn-ghost btn-xs" @click="indexError = ''">Dismiss</button>
         </div>
       </div>
     </div>
@@ -184,7 +208,8 @@
             <th>Filename</th>
             <th>Pages</th>
             <th>Chunks</th>
-            <th>Uploaded</th>
+            <th>Source</th>
+            <th>Indexed</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -212,6 +237,14 @@
             </td>
             <td>{{ doc.total_pages }}</td>
             <td>{{ doc.total_chunks }}</td>
+            <td>
+              <span v-if="doc.source_type === 'local_reference'" class="badge badge-sm badge-ghost" title="Indexed in-place">
+                local
+              </span>
+              <span v-else class="badge badge-sm badge-primary" title="Copied to library">
+                library
+              </span>
+            </td>
             <td>{{ formatDate(doc.indexed_at) }}</td>
             <td>
               <div class="flex gap-2">
@@ -219,7 +252,7 @@
                   :href="`/documents/${doc.document_id}/pdf?collection_id=${collectionStore.currentCollectionId}`"
                   target="_blank"
                   class="btn btn-ghost btn-xs"
-                  title="View PDF"
+                  title="View document"
                 >
                   <Eye :size="16" />
                 </a>
@@ -243,14 +276,12 @@
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
       </svg>
-      <span>No documents found. Upload some documents to get started!</span>
+      <span>No documents found. Select files above to get started!</span>
     </div>
 
     <!-- Error Alert -->
     <div v-if="error" class="alert alert-error">
-      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
+      <XCircle :size="24" />
       <span>{{ error }}</span>
     </div>
 
@@ -260,11 +291,12 @@
         <h3 class="font-bold text-lg">Confirm Delete</h3>
         <p v-if="documentToDelete" class="py-4">
           Are you sure you want to delete <strong>{{ documentToDelete.filename }}</strong>?
-          This will remove the document and all associated metadata from the index.
+          <span v-if="documentToDelete.source_type === 'local_reference'" class="block text-sm text-base-content/70 mt-2">
+            Note: The original file will not be deleted, only the index entry.
+          </span>
         </p>
         <p v-else class="py-4">
           Are you sure you want to delete <strong>{{ selectedDocuments.length }} document(s)</strong>?
-          This will remove all selected documents and their associated metadata from the index.
         </p>
         <div v-if="!documentToDelete && selectedDocuments.length > 0" class="max-h-40 overflow-y-auto mb-4">
           <ul class="list-disc list-inside text-sm space-y-1">
@@ -291,35 +323,26 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import axios from 'axios'
-import { FileText, Eye, Trash2, RefreshCw, CheckSquare, Square, CloudUpload, X, AlertTriangle, FolderOpen, FileCode } from 'lucide-vue-next'
+import { FileText, Eye, Trash2, RefreshCw, X, FolderOpen, FileCode, FileSearch, CheckCircle, XCircle } from 'lucide-vue-next'
 import { useCollectionStore } from '../stores/collectionStore'
+import { useBackgroundJobsStore } from '../stores/backgroundJobsStore'
 
-const emit = defineEmits(['document-deleted'])
+const emit = defineEmits(['document-deleted', 'background-job-started'])
 
 const collectionStore = useCollectionStore()
+const backgroundJobsStore = useBackgroundJobsStore()
 
-// Upload state
-const fileInput = ref(null)
-const folderInput = ref(null)
-const uploadMode = ref('files')  // 'files' or 'folder'
-const selectedFiles = ref([])
-const uploading = ref(false)
-const uploadProgress = ref(0)
-const uploadSuccess = ref(false)
-const uploadError = ref('')
-const uploadResult = ref({})
-
-// Supported file extensions
-const SUPPORTED_EXTENSIONS = [
-  // Documents
-  '.pdf', '.txt', '.docx', '.csv', '.md', '.json',
-  // Pascal/Delphi
-  '.pas', '.dpr', '.dpk', '.pp', '.inc', '.dfm',
-  // Modula-2
-  '.mod', '.def', '.mi',
-  // Assembly
-  '.asm', '.s'
-]
+// Index state (using native file picker)
+const selectedPaths = ref([]) // Array of { path: string, name: string, isFolder?: boolean, size?: number }
+const copyToLibrary = ref(false) // Default OFF - index in-place
+const useBackgroundIndexing = ref(false) // Default OFF - synchronous indexing
+const indexing = ref(false)
+const indexProgress = ref(0)
+const indexProgressPercent = ref(0)
+const currentIndexingFile = ref('')
+const indexSuccess = ref(false)
+const indexError = ref('')
+const indexResult = ref({ count: 0, chunks: 0 })
 
 // Document management state
 const documents = ref([])
@@ -330,155 +353,198 @@ const deleteModal = ref(null)
 const documentToDelete = ref(null)
 const selectedDocuments = ref([])
 
-// Upload functions
-const setUploadMode = (mode) => {
-  uploadMode.value = mode
-  clearAllFiles()
+// Extract filename from path
+const getFilename = (path) => {
+  return path.split(/[/\\]/).pop()
 }
 
-const handleFileSelect = (event) => {
-  const files = Array.from(event.target.files)
-  selectedFiles.value = files
-  uploadSuccess.value = false
-  uploadError.value = ''
-}
-
-const handleFolderSelect = (event) => {
-  const allFiles = Array.from(event.target.files)
-
-  // Filter to only supported file types
-  const supportedFiles = allFiles.filter(file => {
-    const ext = '.' + file.name.split('.').pop().toLowerCase()
-    return SUPPORTED_EXTENSIONS.includes(ext)
-  })
-
-  selectedFiles.value = supportedFiles
-  uploadSuccess.value = false
-  uploadError.value = ''
-
-  // Show info if some files were filtered out
-  const skippedCount = allFiles.length - supportedFiles.length
-  if (skippedCount > 0) {
-    uploadError.value = `${skippedCount} unsupported file(s) skipped.`
-  }
-}
-
-const removeFile = (index) => {
-  selectedFiles.value.splice(index, 1)
-  if (selectedFiles.value.length === 0 && fileInput.value) {
-    fileInput.value.value = ''
-  }
-}
-
-const clearAllFiles = () => {
-  selectedFiles.value = []
-  if (fileInput.value) {
-    fileInput.value.value = ''
-  }
-  if (folderInput.value) {
-    folderInput.value.value = ''
-  }
-  uploadSuccess.value = false
-  uploadError.value = ''
-}
-
-const getDisplayPath = (file) => {
-  // For folder uploads, webkitRelativePath contains "folder/subfolder/file.ext"
-  // For single file uploads, it's empty, so fall back to file.name
-  return file.webkitRelativePath || file.name
-}
-
-const formatFileSize = (bytes) => {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
-}
-
-const formatTotalSize = () => {
-  const total = selectedFiles.value.reduce((sum, file) => sum + file.size, 0)
-  return formatFileSize(total)
-}
-
-const hasLargeFiles = () => {
-  const ONE_MB = 1024 * 1024
-  return selectedFiles.value.some(file => file.size > ONE_MB)
-}
-
-const estimateProcessingTime = () => {
-  const totalBytes = selectedFiles.value.reduce((sum, file) => sum + file.size, 0)
-  const totalMB = totalBytes / (1024 * 1024)
-  const estimatedSeconds = Math.ceil(totalMB * 30)
-
-  if (estimatedSeconds < 60) {
-    return `~${estimatedSeconds} seconds`
-  } else {
-    const minutes = Math.ceil(estimatedSeconds / 60)
-    return `~${minutes} minute${minutes > 1 ? 's' : ''}`
-  }
-}
-
-const beforeUnloadHandler = (e) => {
-  if (uploading.value) {
-    e.preventDefault()
-    e.returnValue = 'Upload in progress. Are you sure you want to leave?'
-    return e.returnValue
-  }
-}
-
-const upload = async () => {
-  if (selectedFiles.value.length === 0) return
-
-  uploading.value = true
-  uploadProgress.value = 0
-  uploadSuccess.value = false
-  uploadError.value = ''
-
-  const formData = new FormData()
-  selectedFiles.value.forEach(file => {
-    formData.append('files', file)
-  })
-
+// Open native file picker via backend API
+const openFilePicker = async () => {
   try {
-    const progressInterval = setInterval(() => {
-      if (uploadProgress.value < 90) {
-        uploadProgress.value += 10
-      }
-    }, 500)
-
-    const collectionId = collectionStore.currentCollectionId
-    const response = await axios.post(`/documents/upload?collection_id=${collectionId}`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
+    indexError.value = ''
+    const response = await axios.post('/api/file-picker', null, {
+      params: { multiple: true, include_sizes: true }
     })
 
-    clearInterval(progressInterval)
-    uploadProgress.value = 100
-
-    uploadResult.value = response.data
-    uploadSuccess.value = true
-    selectedFiles.value = []
-    if (fileInput.value) {
-      fileInput.value.value = ''
+    if (response.data.paths && response.data.paths.length > 0) {
+      const existingPaths = new Set(selectedPaths.value.map(p => p.path))
+      const sizes = response.data.sizes || {}
+      for (const path of response.data.paths) {
+        if (!existingPaths.has(path)) {
+          selectedPaths.value.push({
+            path: path,
+            name: getFilename(path),
+            size: sizes[path] || 0
+          })
+        }
+      }
     }
-    if (folderInput.value) {
-      folderInput.value.value = ''
-    }
-
-    // Reload documents list
-    await loadDocuments()
-    emit('document-deleted')  // Reuse this event to trigger stats update
-
-    setTimeout(() => {
-      uploadSuccess.value = false
-    }, 5000)
   } catch (err) {
-    console.error('Upload error:', err)
-    uploadError.value = err.response?.data?.detail || err.message || 'Upload failed. Please try again.'
+    console.error('File picker error:', err)
+    indexError.value = err.response?.data?.detail || 'Failed to open file picker'
+  }
+}
+
+// Open native folder picker via backend API
+const openFolderPicker = async () => {
+  try {
+    indexError.value = ''
+    const response = await axios.post('/api/folder-picker')
+
+    if (response.data.path) {
+      const existingPaths = new Set(selectedPaths.value.map(p => p.path))
+      if (!existingPaths.has(response.data.path)) {
+        selectedPaths.value.push({
+          path: response.data.path,
+          name: getFilename(response.data.path),
+          isFolder: true
+        })
+      }
+    }
+  } catch (err) {
+    console.error('Folder picker error:', err)
+    indexError.value = err.response?.data?.detail || 'Failed to open folder picker'
+  }
+}
+
+const removePath = (index) => {
+  selectedPaths.value.splice(index, 1)
+}
+
+const clearAllPaths = () => {
+  selectedPaths.value = []
+  indexSuccess.value = false
+  indexError.value = ''
+}
+
+// Main indexing function
+const indexFiles = async () => {
+  if (selectedPaths.value.length === 0) return
+
+  indexing.value = true
+  indexProgress.value = 0
+  indexProgressPercent.value = 0
+  currentIndexingFile.value = ''
+  indexSuccess.value = false
+  indexError.value = ''
+
+  // Separate files and folders
+  const files = selectedPaths.value.filter(p => !p.isFolder)
+  const filePaths = files.map(p => p.path)
+  const folders = selectedPaths.value.filter(p => p.isFolder)
+
+  // Use background indexing based on toggle
+  const useBackground = useBackgroundIndexing.value
+
+  let successCount = 0
+  let totalChunks = 0
+  const errors = []
+
+  try {
+    if (filePaths.length > 0) {
+      if (useBackground) {
+        // Use background indexing for large file sets
+        try {
+          const response = await axios.post('/documents/index-local-async', {
+            file_paths: filePaths,
+            collection_id: collectionStore.currentCollectionId,
+            copy_to_library: copyToLibrary.value
+          })
+
+          // Add job to background jobs store for tracking
+          backgroundJobsStore.addUploadJob(response.data)
+
+          // Emit event to open the jobs drawer
+          emit('background-job-started')
+
+          // Show background notification
+          indexSuccess.value = true
+          indexResult.value = { count: filePaths.length, chunks: 0, background: true }
+          selectedPaths.value = folders.length > 0 ? folders : []
+
+        } catch (err) {
+          const errorMsg = err.response?.data?.detail || err.message
+          errors.push(`Files: ${errorMsg}`)
+          console.error('Failed to start background indexing:', err)
+        }
+      } else {
+        // Use synchronous indexing
+        for (let i = 0; i < filePaths.length; i++) {
+          const filename = getFilename(filePaths[i])
+          currentIndexingFile.value = filename
+          indexProgress.value = i + 1
+          indexProgressPercent.value = ((i) / filePaths.length) * 100
+
+          try {
+            const response = await axios.post('/documents/index-local', {
+              file_path: filePaths[i],
+              collection_id: collectionStore.currentCollectionId,
+              copy_to_library: copyToLibrary.value
+            })
+            successCount++
+            totalChunks += response.data.total_chunks || 0
+            // Update progress after successful index
+            indexProgressPercent.value = ((i + 1) / filePaths.length) * 100
+          } catch (err) {
+            const errorMsg = err.response?.data?.detail || err.message
+            errors.push(`${filename}: ${errorMsg}`)
+            console.error(`Failed to index ${filePaths[i]}:`, err)
+          }
+        }
+
+        if (successCount > 0) {
+          indexSuccess.value = true
+          indexResult.value = { count: successCount, chunks: totalChunks }
+          selectedPaths.value = folders
+          loadDocuments()
+          emit('document-deleted')
+        }
+      }
+    }
+
+    // Index folders via repo endpoint (synchronous)
+    for (let i = 0; i < folders.length; i++) {
+      const folder = folders[i]
+      currentIndexingFile.value = folder.name
+      indexProgress.value = filePaths.length + i + 1
+
+      try {
+        const response = await axios.post('/documents/upload-repo', {
+          path: folder.path,
+          collection_id: collectionStore.currentCollectionId,
+          recursive: true
+        })
+        successCount += response.data.files_indexed || 0
+        totalChunks += response.data.total_chunks || 0
+      } catch (err) {
+        const errorMsg = err.response?.data?.detail || err.message
+        errors.push(`${folder.name}: ${errorMsg}`)
+        console.error(`Failed to index ${folder.path}:`, err)
+      }
+    }
+
+    // If we indexed folders synchronously, show results
+    if (folders.length > 0 && successCount > 0) {
+      indexSuccess.value = true
+      indexResult.value = { count: successCount, chunks: totalChunks }
+      selectedPaths.value = []
+      loadDocuments()
+      emit('document-deleted')
+    }
+
   } finally {
-    uploading.value = false
+    indexing.value = false
+    currentIndexingFile.value = ''
+    indexProgressPercent.value = 0
+  }
+
+  if (errors.length > 0) {
+    indexError.value = errors.join('; ')
+  }
+
+  // Clear selection if everything was submitted successfully
+  if (errors.length === 0) {
+    selectedPaths.value = []
   }
 }
 
@@ -576,12 +642,10 @@ const deleteDocument = async () => {
     const collectionId = collectionStore.currentCollectionId
     await axios.delete(`/documents/${documentToDelete.value.document_id}?collection_id=${collectionId}`)
 
-    // Remove from local list
     documents.value = documents.value.filter(
       doc => doc.document_id !== documentToDelete.value.document_id
     )
 
-    // Remove from selection if it was selected
     const index = selectedDocuments.value.indexOf(documentToDelete.value.document_id)
     if (index > -1) {
       selectedDocuments.value.splice(index, 1)
@@ -608,20 +672,16 @@ const deleteBulk = async () => {
   error.value = ''
 
   try {
-    // Delete all selected documents
     const collectionId = collectionStore.currentCollectionId
     for (const docId of selectedDocuments.value) {
       await axios.delete(`/documents/${docId}?collection_id=${collectionId}`)
     }
 
-    // Remove deleted documents from local list
     documents.value = documents.value.filter(
       doc => !selectedDocuments.value.includes(doc.document_id)
     )
 
-    // Clear selection
     selectedDocuments.value = []
-
     emit('document-deleted')
   } catch (err) {
     error.value = err.response?.data?.detail || 'Failed to delete documents'
@@ -634,8 +694,27 @@ const deleteBulk = async () => {
 // Watch for collection changes
 watch(() => collectionStore.currentCollectionId, () => {
   loadDocuments()
-  selectedDocuments.value = []  // Clear selection when switching collections
+  selectedDocuments.value = []
 })
+
+// Watch for completed background uploads to reload documents
+watch(() => backgroundJobsStore.uploadJobs, (jobs) => {
+  const completedJob = jobs.find(j => j.status === 'completed' && !j.reloaded)
+  if (completedJob) {
+    completedJob.reloaded = true
+    loadDocuments()
+    emit('document-deleted')
+  }
+}, { deep: true })
+
+// Warn user before leaving page during indexing
+const beforeUnloadHandler = (e) => {
+  if (indexing.value) {
+    e.preventDefault()
+    e.returnValue = 'Indexing in progress. Are you sure you want to leave?'
+    return e.returnValue
+  }
+}
 
 onMounted(() => {
   loadDocuments()
